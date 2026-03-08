@@ -4,45 +4,75 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="index,follow">
-  <title>Pipe Checker</title>
+  <title>PipeChecker by Little Post Manager</title>
+  <link rel="icon" type="image/jpeg" href="/static/lpm-favicon.jpg">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <div class="topbar">
-    <div>
-      <h1>Pipe Checker</h1>
-      <p class="tagline">Shit clogs pipes, get the shit out with Pipe Checker.</p>
-      <p class="privacy-note">Pipe Checker analyzes pasted deal text on demand and does not store your opportunity notes after the response is returned.</p>
+  <header class="site-header">
+    <div class="header-copy">
+      <div class="brand-lockup">
+          <img src="/static/lpm-favicon.jpg" alt="Little Post Manager mascot" class="brand-mark">
+          <div>
+            <div class="brand-eyebrow">Little Post Manager presents</div>
+            <h1>PipeChecker</h1>
+            <div class="brand-subline">by Little Post Manager</div>
+          </div>
+        </div>
+      <p class="tagline">Shit clogs pipes, get the shit out with PipeChecker.</p>
+      <p class="privacy-note">PipeChecker by Little Post Manager analyzes pasted deal text on demand and does not store your opportunity notes after the response is returned.</p>
     </div>
     <div class="counter">Deals analyzed: <span id="dealCount">{{ deal_count }}</span></div>
-  </div>
+  </header>
 
-  <div class="layout">
-    <section class="panel input-panel">
-      <h2>Paste opportunity context</h2>
-      <p class="helper">Paste CRM notes, email chains, or mixed raw deal text. Pick BANT or MEDDPICC and Pipe Checker will inspect qualification gaps, stage risk, and next steps.</p>
-      <div class="method-bar">
-        <label for="methodology" class="method-label">Methodology</label>
-        <select id="methodology">
-          <option value="bant">BANT</option>
-          <option value="meddpicc">MEDDPICC</option>
-        </select>
+  <main class="page-shell">
+    <section class="brand-banner panel">
+      <div class="brand-banner-copy">
+        <div class="section-kicker">Powered by</div>
+        <h2>Little Post Manager</h2>
+        <p class="helper">PipeChecker is a Little Post Manager experiment for sales teams that want brutally honest deal inspection.</p>
       </div>
+      <img src="/static/lpm-logo.jpg" alt="Little Post Manager logo" class="brand-banner-logo">
+    </section>
+    <section class="input-card panel">
+      <div class="section-head">
+        <div>
+          <h2>Paste opportunity context</h2>
+          <p class="helper">Paste CRM notes, email chains, or mixed raw deal text. Pick BANT or MEDDPICC and Pipe Checker will score the deal, flag risks, and recommend the next move.</p>
+        </div>
+        <div class="method-bar">
+          <label for="methodology" class="field-label">Methodology</label>
+          <select id="methodology">
+            <option value="bant">BANT</option>
+            <option value="meddpicc">MEDDPICC</option>
+          </select>
+        </div>
+      </div>
+
       <textarea id="rawText" maxlength="{{ max_input_chars }}" placeholder="Paste deal notes, opportunity updates, emails, or CRM details here..."></textarea>
-      <div class="small-meta"><span id="charCount">0</span> / {{ max_input_chars }} characters</div>
-      <div class="actions">
-        <button id="analyzeBtn">Analyze deal</button>
-        <button id="clearBtn" class="secondary">Start over</button>
+
+      <div class="input-footer">
+        <div class="small-meta"><span id="charCount">0</span> / {{ max_input_chars }} characters</div>
+        <div class="actions">
+          <button id="analyzeBtn">Analyze deal</button>
+          <button id="clearBtn" class="secondary">Start over</button>
+        </div>
       </div>
+
       <div id="loadingStatus" class="loading-status hidden"></div>
       <div id="errorBox" class="error hidden"></div>
     </section>
 
-    <section class="panel results-panel">
-      <div id="emptyState" class="empty-state">Run an analysis to see methodology scoring, red flags, and recommended outreach.</div>
+    <section class="results-wrap">
+      <div id="emptyState" class="empty-state panel">
+        <div>
+          <div class="empty-title">Paste a deal. Get the truth.</div>
+          <p>Pipe Checker will score the opportunity, surface the biggest risks, and suggest what to do next.</p>
+        </div>
+      </div>
       <div id="results" class="hidden"></div>
     </section>
-  </div>
+  </main>
 
   <script src="/static/app.js"></script>
 </body>

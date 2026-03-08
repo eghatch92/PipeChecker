@@ -41,13 +41,13 @@ let loadingInterval = null;
 let loadingMessageIndex = 0;
 let latestAnalysis = null;
 let unlocked = false;
+let detailFilter = 'all';
 
 function startLoadingStatus() {
-  if (!loadingStatus) return;
   loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
   loadingStatus.textContent = loadingMessages[loadingMessageIndex];
   loadingStatus.classList.remove('hidden');
-  if (loadingInterval) clearInterval(loadingInterval);
+  clearInterval(loadingInterval);
   loadingInterval = setInterval(() => {
     loadingMessageIndex = (loadingMessageIndex + 1) % loadingMessages.length;
     loadingStatus.textContent = loadingMessages[loadingMessageIndex];
@@ -55,18 +55,14 @@ function startLoadingStatus() {
 }
 
 function stopLoadingStatus() {
-  if (loadingInterval) {
-    clearInterval(loadingInterval);
-    loadingInterval = null;
-  }
-  if (loadingStatus) {
-    loadingStatus.classList.add('hidden');
-    loadingStatus.textContent = '';
-  }
+  clearInterval(loadingInterval);
+  loadingInterval = null;
+  loadingStatus.classList.add('hidden');
+  loadingStatus.textContent = '';
 }
 
 function escapeHtml(str) {
-  return String(str)
+  return String(str ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -76,7 +72,7 @@ function escapeHtml(str) {
 
 function renderList(items, cls = '') {
   if (!items || !items.length) return `<div class="helper ${cls}">None detected.</div>`;
-  return `<ul class="${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
+  return `<ul class="tight-list ${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
 }
 
 function copyText(text, successText = 'Copied.') {
@@ -84,7 +80,7 @@ function copyText(text, successText = 'Copied.') {
 }
 
 function buildShareText(data) {
-  return `Just ran a deal through Pipe Checker.\n\nMethodology: ${data.methodology_label}\nScore: ${data.overall_score}/100\nStage: ${data.stage}\n${data.benchmark_text}\n\nTry it: ${window.location.origin}`;
+  return `Just ran a deal through PipeChecker by Little Post Manager.\n\nMethodology: ${data.methodology_label}\nScore: ${data.overall_score}/100\nStage: ${data.stage}\n${data.benchmark_text}\n\nTry it: ${window.location.origin}`;
 }
 
 function scoreTone(score) {
@@ -106,127 +102,174 @@ function renderUsageBars(usage, methodology) {
         <div class="usage-top"><span>MEDDPICC</span><span>${usage.meddpicc_pct || 0}% · ${usage.meddpicc_count || 0} runs</span></div>
         <div class="usage-track"><span style="width:${usage.meddpicc_pct || 0}%"></span></div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
 function renderSignalRows(signals) {
-  if (!signals || !signals.length) return '';
+  if (!signals || !signals.length) return '<div class="helper">No signal detail available yet.</div>';
   return `<div class="signal-grid">${signals.map(sig => `
     <div class="signal-row">
       <div class="signal-top"><span>${escapeHtml(sig.name)}</span><span class="tiny-badge ${sig.status}">${escapeHtml(sig.status)}</span></div>
       <div class="signal-points">${sig.points} / ${sig.max_points} pts</div>
       <div class="signal-hint">${escapeHtml(sig.missing_hint)}</div>
-    </div>
-  `).join('')}</div>`;
+    </div>`).join('')}</div>`;
 }
 
-function renderCategoryAccordion(name, obj, isOpen = false) {
+function renderCategoryCard(name, obj, isOpen = false) {
+  const statusClass = obj.status || 'Missing';
   return `
-    <details class="category-accordion" ${isOpen ? 'open' : ''}>
-      <summary>
-        <div>
+    <article class="category-card ${statusClass.toLowerCase()} ${isOpen ? 'open' : ''}" data-status="${statusClass.toLowerCase()}">
+      <div class="category-summary" data-accordion-toggle>
+        <div class="category-main">
           <div class="category-title-row">
             <span class="category-name">${escapeHtml(name)}</span>
-            <span class="badge ${obj.status}">${obj.status}</span>
+            <span class="badge ${statusClass}">${escapeHtml(statusClass)}</span>
           </div>
           <div class="category-subcopy">${escapeHtml(obj.description)}</div>
         </div>
         <div class="category-score">${obj.points} / ${obj.max_points}</div>
-      </summary>
+        <div class="category-chevron">+</div>
+      </div>
       <div class="category-body">
-        <div class="category-columns">
-          <div class="detail-block">
+        <div class="detail-grid">
+          <div class="subpanel">
             <h4>Evidence found</h4>
-            ${renderList(obj.evidence, 'tight-list')}
+            ${renderList(obj.evidence)}
           </div>
-          <div class="detail-block">
+          <div class="subpanel">
             <h4>Missing / expected</h4>
-            ${renderList(obj.missing, 'tight-list')}
+            ${renderList(obj.missing)}
           </div>
         </div>
-        <div class="detail-block detail-block-full">
+        <div class="subpanel">
           <h4>How to correct</h4>
-          <p class="helper strong-helper">${escapeHtml(obj.correction)}</p>
+          <p class="helper">${escapeHtml(obj.correction)}</p>
         </div>
-        ${renderSignalRows(obj.signals)}
-      </div>
-    </details>
-  `;
-}
-
-function renderUnlockedSection(data) {
-  return `
-    <div class="stack-section">
-      <div class="section-kicker">Action plan</div>
-      <div class="card primary-card">
-        <div class="card-heading-row">
-          <div>
-            <h3 class="card-title">Recommended next step</h3>
-            <div class="helper">${escapeHtml(data.summary_text)}</div>
-          </div>
-          <span class="pill">${escapeHtml(data.next_step)}</span>
+        <div class="subpanel">
+          <h4>Signal breakdown</h4>
+          ${renderSignalRows(obj.signals)}
         </div>
       </div>
-
-      <div class="card split-card">
-        <div>
-          <div class="copy-row"><strong>Recommended email</strong><button class="mini-btn" id="copyEmailBtn">Copy</button></div>
-          <div class="subject-line"><span>Subject</span>${escapeHtml(data.email.subject)}</div>
-          <pre>${escapeHtml(data.email.body)}</pre>
-          <div class="helper">${data.ai_enabled ? 'AI-assisted rewrite is enabled for this server.' : 'AI fallback is off, so this is using the built-in coaching template.'}</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="copy-row"><strong>Recommended call script</strong><button class="mini-btn" id="copyCallBtn">Copy</button></div>
-        ${renderList(data.call_script, 'tight-list')}
-      </div>
-    </div>
-  `;
+    </article>`;
 }
 
 function renderLockedSection(data) {
   return `
-    <div class="card locked-panel" id="lockedPanel">
-      <div class="locked-title">🔒 Unlock the follow-up email and deal strategy</div>
-      <div class="helper">Pipe Checker Pro reveals the customer-facing next-step email, call script, and action plan for this ${escapeHtml(data.methodology_label)} readout. Drop your email to unlock it now and join the waitlist for pipeline-wide analysis.</div>
+    <section class="locked-panel panel" id="lockedPanel">
+      <div class="section-kicker">Unlock strategy</div>
+      <h3>Unlock the customer email and call plan</h3>
+      <p class="helper">Drop your email to unlock the customer-facing email, call script, and action plan for this ${escapeHtml(data.methodology_label)} readout.</p>
       <form id="waitlistForm" class="waitlist-inline">
         <input type="email" id="waitlistEmail" placeholder="Enter your work email" required>
         <button type="submit">Unlock insight</button>
       </form>
       <div class="unlock-note">No spam. Early access only.</div>
-      <div id="waitlistMessage" class="helper" style="margin-top:12px;"></div>
-    </div>
-  `;
+      <div id="waitlistMessage" class="helper"></div>
+    </section>`;
 }
 
-function renderLeaderboard(items) {
-  if (!items || !items.length) return '<div class="helper">No leaderboard data yet. Be the first glorious toilet legend today.</div>';
-  return `<div class="leaderboard-list">${items.map(item => `
-    <div class="leaderboard-row">
-      <div class="leaderboard-rank">#${item.rank}</div>
-      <div>
-        <div class="leaderboard-title">${escapeHtml(item.label)}</div>
-        <div class="helper">Top score logged today</div>
+function renderUnlockedSection(data) {
+  return `
+    <section class="unlocked-card panel">
+      <div class="section-kicker">Unlocked strategy</div>
+      <div class="action-strip">
+        <div class="action-card">
+          <h3>Recommended next step</h3>
+          <div class="key-line">${escapeHtml(data.next_step)}</div>
+          <p class="helper" style="margin-top:10px;">${escapeHtml(data.summary_text)}</p>
+          <div class="quick-actions">
+            <button class="mini-btn" id="copyEmailBtn">Copy email</button>
+            <button class="mini-btn secondary" id="copyCallBtn">Copy call script</button>
+          </div>
+        </div>
+        <div class="stats-card">
+          <div class="section-kicker">Customer email</div>
+          <div class="subpanel" style="margin-top:10px;">
+            <h4>Subject</h4>
+            <div>${escapeHtml(data.email.subject)}</div>
+          </div>
+        </div>
       </div>
-      <div class="leaderboard-score">${item.score}</div>
-    </div>
-  `).join('')}</div>`;
+      <div class="detail-grid" style="margin-top:18px;">
+        <div class="subpanel">
+          <h4>Email draft</h4>
+          <pre>${escapeHtml(data.email.body)}</pre>
+        </div>
+        <div class="subpanel">
+          <h4>Call script</h4>
+          ${renderList(data.call_script)}
+        </div>
+      </div>
+    </section>`;
+}
+
+function renderStatsRail(data, averageText) {
+  const usage = data.methodology_usage || {};
+  const leaderboard = (data.leaderboard_today || [])[0];
+  return `
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="micro-label">Average score</div>
+        <div class="stat-value">${escapeHtml(String(data.average_score || 0))}</div>
+        <div class="stat-note">${escapeHtml(averageText)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="micro-label">Methodology usage</div>
+        ${renderUsageBars(usage, data.methodology)}
+      </div>
+      <div class="stat-card">
+        <div class="micro-label">Top score today</div>
+        ${leaderboard ? `
+          <div class="leader-inline">
+            <div class="leaderboard-row">
+              <div class="leaderboard-rank">#${leaderboard.rank}</div>
+              <div>
+                <div class="leaderboard-title">${escapeHtml(leaderboard.label)}</div>
+                <div class="helper">Highest score logged today</div>
+              </div>
+              <div class="leaderboard-score">${leaderboard.score}</div>
+            </div>
+          </div>` : '<div class="stat-note">No leaderboard data yet.</div>'}
+      </div>
+    </div>`;
 }
 
 function bindResultActions(data) {
-  const shareBtn = document.getElementById('shareScoreBtn');
-  if (shareBtn) shareBtn.addEventListener('click', () => copyText(buildShareText(data), 'Share text copied. Paste it into LinkedIn or X.'));
+  document.getElementById('shareScoreBtn')?.addEventListener('click', () => {
+    copyText(buildShareText(data), 'Share text copied.');
+  });
 
-  const copyEmailBtn = document.getElementById('copyEmailBtn');
-  if (copyEmailBtn) {
-    const emailBody = `Subject: ${data.email.subject}\n\n${data.email.body}`;
-    copyEmailBtn.addEventListener('click', () => copyText(emailBody, 'Email copied.'));
-  }
+  document.getElementById('runAnotherBtn')?.addEventListener('click', () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    rawText.focus();
+  });
 
-  const copyCallBtn = document.getElementById('copyCallBtn');
-  if (copyCallBtn) copyCallBtn.addEventListener('click', () => copyText(data.call_script.join('\n'), 'Call script copied.'));
+  document.getElementById('copyEmailBtn')?.addEventListener('click', () => {
+    const body = `Subject: ${data.email.subject}\n\n${data.email.body}`;
+    copyText(body, 'Email copied.');
+  });
+
+  document.getElementById('copyCallBtn')?.addEventListener('click', () => {
+    copyText(data.call_script.join('\n'), 'Call script copied.');
+  });
+
+  document.querySelectorAll('[data-accordion-toggle]').forEach(el => {
+    el.addEventListener('click', () => {
+      const card = el.closest('.category-card');
+      if (card) card.classList.toggle('open');
+    });
+  });
+
+  document.querySelectorAll('[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      detailFilter = btn.dataset.filter;
+      document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === detailFilter));
+      document.querySelectorAll('.category-card').forEach(card => {
+        const match = detailFilter === 'all' || card.dataset.status === detailFilter;
+        card.style.display = match ? '' : 'none';
+      });
+    });
+  });
 
   const waitlistForm = document.getElementById('waitlistForm');
   if (waitlistForm) {
@@ -261,85 +304,114 @@ function bindResultActions(data) {
 function renderResults(data) {
   latestAnalysis = data;
   emptyState.classList.add('hidden');
-  emptyState.style.display = 'none';
   results.classList.remove('hidden');
   dealCount.textContent = data.deal_count;
 
-  const averageText = data.average_score ? `${data.average_score}% avg for ${data.methodology_label} deals` : `First ${data.methodology_label} deal on the board`;
-  const topThresholdText = data.top20_threshold ? `${data.top20_threshold}+ gets you into the top 20% of ${data.methodology_label} runs` : 'Top-20% benchmark will appear after more runs';
-  const unlockedHtml = unlocked ? renderUnlockedSection(data) : renderLockedSection(data);
-  const categoriesHtml = Object.entries(data.analysis).map(([name, obj], idx) => renderCategoryAccordion(name, obj, idx === 0)).join('');
+  const averageText = data.average_score
+    ? `${data.average_score}% avg for ${data.methodology_label} deals`
+    : `First ${data.methodology_label} deal on the board`;
+
+  const topThresholdText = data.top20_threshold
+    ? `${data.top20_threshold}+ gets into the top 20% of ${data.methodology_label} runs`
+    : 'Top-20% benchmark appears after more runs';
+
+  const categoriesHtml = Object.entries(data.analysis)
+    .map(([name, obj], idx) => renderCategoryCard(name, obj, idx === 0))
+    .join('');
 
   results.innerHTML = `
     <div class="results-shell">
       <section class="hero-grid">
-        <div class="hero-card card">
+        <article class="hero-card">
           <div class="gif-wrap">
             <img src="${escapeHtml(data.gif.file)}" alt="${escapeHtml(data.gif.label)}">
             <div class="gif-caption"><strong>${escapeHtml(data.gif.label)}</strong><br>${escapeHtml(data.gif.caption)}</div>
           </div>
           <div class="hero-copy">
             <div class="section-kicker">${escapeHtml(data.methodology_label)} score</div>
-            <div class="score-big">${data.overall_score}<span>/100</span></div>
-            <div class="hero-tone">${escapeHtml(scoreTone(data.overall_score))}</div>
-            <div class="score-sub">${escapeHtml(data.benchmark_text)}</div>
-            <div class="score-actions">
+            <div class="score-row">
+              <div class="score-big">${data.overall_score}<span>/100</span></div>
+              <div class="hero-tone">${escapeHtml(scoreTone(data.overall_score))}</div>
+            </div>
+            <div class="hero-summary">${escapeHtml(data.benchmark_text)}</div>
+            <div class="hero-actions">
               <button class="mini-btn" id="shareScoreBtn">Copy share text</button>
+              <button class="mini-btn secondary" id="runAnotherBtn">Analyze another deal</button>
             </div>
           </div>
-        </div>
+        </article>
 
-        <div class="snapshot-grid">
-          <div class="metric compact"><div class="metric-label">Stage</div><div class="metric-value">${escapeHtml(data.stage)}</div></div>
-          <div class="metric compact"><div class="metric-label">Confidence</div><div class="metric-value">${escapeHtml(data.confidence)}</div></div>
-          <div class="metric compact"><div class="metric-label">Deals analyzed</div><div class="metric-value">${escapeHtml(String(data.deal_count))}</div></div>
-          <div class="metric compact"><div class="metric-label">Average score</div><div class="metric-value">${escapeHtml(String(data.average_score || 0))}</div><div class="metric-note">${escapeHtml(averageText)}</div></div>
-        </div>
+        <aside class="snapshot-card">
+          <div class="snapshot-top">
+            <div class="snapshot-metric">
+              <div class="metric-label">Stage</div>
+              <div class="snapshot-value">${escapeHtml(data.stage)}</div>
+            </div>
+            <div class="snapshot-metric">
+              <div class="metric-label">Confidence</div>
+              <div class="snapshot-value">${escapeHtml(data.confidence)}</div>
+            </div>
+            <div class="snapshot-metric">
+              <div class="metric-label">Deals analyzed</div>
+              <div class="snapshot-value">${escapeHtml(String(data.deal_count))}</div>
+            </div>
+          </div>
+          <div class="snapshot-secondary">
+            <div class="snapshot-highlight">
+              <div class="metric-label">Next step</div>
+              <div class="highlight-title">${escapeHtml(data.next_step)}</div>
+              <div class="helper">${escapeHtml(data.summary_text)}</div>
+            </div>
+            <div class="snapshot-highlight">
+              <div class="metric-label">Benchmark</div>
+              <div class="highlight-title">${escapeHtml(String(data.average_score || 0))} avg</div>
+              <div class="helper">${escapeHtml(topThresholdText)}</div>
+            </div>
+          </div>
+        </aside>
       </section>
 
-      <section class="insights-grid">
-        <div class="card insight-card">
-          <div class="section-kicker">What to do now</div>
-          <h3 class="card-title">${escapeHtml(data.next_step)}</h3>
-          <p class="helper strong-helper">${escapeHtml(data.summary_text)}</p>
-          <div class="helper">${escapeHtml(topThresholdText)}</div>
+      <section class="red-flags-card card">
+        <div class="red-flags-head">
+          <div>
+            <div class="section-kicker">Deal risks</div>
+            <h3>What could kill this deal</h3>
+          </div>
         </div>
-
-        <div class="card insight-card">
-          <div class="section-kicker">Methodology usage</div>
-          <h3 class="card-title">What people are using</h3>
-          ${renderUsageBars(data.methodology_usage || {}, data.methodology)}
-        </div>
-
-        <div class="card insight-card">
-          <div class="section-kicker">Leaderboard</div>
-          <h3 class="card-title">Top pipe scores today</h3>
-          ${renderLeaderboard(data.leaderboard_today || [])}
-        </div>
+        ${renderList(data.red_flags)}
       </section>
 
-      <section class="stack-section">
-        <div class="section-kicker">Red flags</div>
-        <div class="card">
-          ${renderList(data.red_flags, 'tight-list')}
+      ${unlocked ? renderUnlockedSection(data) : renderLockedSection(data)}
+
+      <section class="detail-card card">
+        <div class="detail-head">
+          <div>
+            <div class="section-kicker">Detailed analysis</div>
+            <h3>Open only the categories you need</h3>
+          </div>
+          <div class="detail-toggle-bar">
+            <button class="mini-btn filter-chip active" data-filter="all">All</button>
+            <button class="mini-btn filter-chip" data-filter="missing">Missing</button>
+            <button class="mini-btn filter-chip" data-filter="partial">Partial</button>
+            <button class="mini-btn filter-chip" data-filter="complete">Complete</button>
+          </div>
         </div>
-      </section>
-
-      ${unlockedHtml}
-
-      <section class="stack-section">
-        <div class="section-kicker">Detailed analysis</div>
         <div class="accordion-stack">${categoriesHtml}</div>
       </section>
 
-      <div class="card footer-card">
+      <section class="stats-card card">
+        <div class="section-kicker">Community stats</div>
+        <h3>How this run stacks up</h3>
+        ${renderStatsRail(data, averageText)}
+      </section>
+
+      <div class="footer-card card">
         <strong>Want Pipe Checker to audit your entire pipeline automatically?</strong>
         <div class="helper" style="margin-top:8px;">We're building a version that scans every deal in your CRM and flags weak opportunities before they slip.</div>
         <div class="helper" style="margin-top:6px;">${unlocked ? 'You already unlocked this deal. Future-you is so brave.' : 'Unlocking the strategy also puts you on the early access list.'}</div>
       </div>
       <div class="micro-footer">Built by a sales nerd. More tools coming.</div>
-    </div>
-  `;
+    </div>`;
 
   bindResultActions(data);
 }
@@ -351,6 +423,7 @@ analyzeBtn.addEventListener('click', async () => {
   startLoadingStatus();
   try {
     unlocked = false;
+    detailFilter = 'all';
     const res = await fetch('/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -372,11 +445,11 @@ analyzeBtn.addEventListener('click', async () => {
 clearBtn.addEventListener('click', () => {
   unlocked = false;
   latestAnalysis = null;
+  detailFilter = 'all';
   rawText.value = '';
   charCount.textContent = '0';
   results.classList.add('hidden');
   emptyState.classList.remove('hidden');
-  emptyState.style.display = 'flex';
   errorBox.classList.add('hidden');
   stopLoadingStatus();
   rawText.focus();

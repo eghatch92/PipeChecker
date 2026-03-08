@@ -7,6 +7,62 @@ const errorBox = document.getElementById('errorBox');
 const dealCount = document.getElementById('dealCount');
 const charCount = document.getElementById('charCount');
 const methodologySelect = document.getElementById('methodology');
+const loadingStatus = document.getElementById('loadingStatus');
+
+const loadingMessages = [
+  'Getting the plunger...',
+  'Flushing the forecast...',
+  'Checking for emotional support toilet paper...',
+  'Sending a camera down the poop tunnel...',
+  'Pressure-testing the porcelain...',
+  'Wrestling the sewer goblin...',
+  'Scooping mystery sludge out of stage three...',
+  'Running a brown-water diagnostics sweep...',
+  'Looking for who clogged budget approval...',
+  'Spraying the pipe with aggressive honesty...',
+  'Snaking the deal for hidden champion problems...',
+  'Shaking loose whatever is stuck in authority...',
+  'Listening for timeline gurgles...',
+  'Checking if this pipeline is all fart, no flush...',
+  'Digging corn kernels out of the decision process...',
+  'Bleaching the call notes...',
+  'Inspecting the bowl for MEDDPICC residue...',
+  'Trying not to make eye contact with procurement...',
+  'Unclogging the economic buyer trap...',
+  'Seeing whether this thing is constipated or just dead...',
+  'Running the courtesy flush on weak deal hygiene...',
+  'Comparing your notes against OSHA sewer standards...',
+  'Wiping down the mutual action plan...',
+  'Poking the status quo with a toilet brush...',
+  'Asking the pipe spirit for guidance...'
+];
+
+let loadingInterval = null;
+let loadingMessageIndex = 0;
+
+function startLoadingStatus() {
+  if (!loadingStatus) return;
+  loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
+  loadingStatus.textContent = loadingMessages[loadingMessageIndex];
+  loadingStatus.classList.remove('hidden');
+  if (loadingInterval) clearInterval(loadingInterval);
+  loadingInterval = setInterval(() => {
+    loadingMessageIndex = (loadingMessageIndex + 1) % loadingMessages.length;
+    loadingStatus.textContent = loadingMessages[loadingMessageIndex];
+  }, 1500);
+}
+
+function stopLoadingStatus() {
+  if (loadingInterval) {
+    clearInterval(loadingInterval);
+    loadingInterval = null;
+  }
+  if (loadingStatus) {
+    loadingStatus.classList.add('hidden');
+    loadingStatus.textContent = '';
+  }
+}
+
 
 let latestAnalysis = null;
 let unlocked = false;
@@ -189,6 +245,7 @@ analyzeBtn.addEventListener('click', async () => {
   errorBox.classList.add('hidden');
   analyzeBtn.disabled = true;
   analyzeBtn.textContent = 'Analyzing...';
+  startLoadingStatus();
   try {
     unlocked = false;
     const res = await fetch('/analyze', {
@@ -203,6 +260,7 @@ analyzeBtn.addEventListener('click', async () => {
     errorBox.textContent = err.message;
     errorBox.classList.remove('hidden');
   } finally {
+    stopLoadingStatus();
     analyzeBtn.disabled = false;
     analyzeBtn.textContent = 'Analyze deal';
   }
@@ -217,6 +275,7 @@ clearBtn.addEventListener('click', () => {
   emptyState.classList.remove('hidden');
   emptyState.style.display = 'flex';
   errorBox.classList.add('hidden');
+  stopLoadingStatus();
 });
 
 rawText.addEventListener('input', () => {

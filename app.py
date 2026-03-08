@@ -645,8 +645,8 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
     ] + missing[:3]
     if not missing:
         script += [
-            'What could still derail this between now and signature?',
-            'Who else needs to buy into the plan before this moves forward?'
+            'What could still get in the way between now and signature?',
+            'Who else should we involve now so the process stays smooth?'
         ]
     return {'subject': subj, 'body': email}, script
 
@@ -668,6 +668,10 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
     system_prompt = (
         'You are a pragmatic B2B sales coach. '
         'Write crisp, useful output for a seller. '
+        'The email must be written as the seller sending a next-step email directly to the customer. '
+        'Do not write an internal email, manager update, recap note, or message to colleagues. '
+        'Address the customer directly and focus on moving the deal forward. '
+        'The call_script must be customer-facing talk track or questions for the seller to use live with the customer. '
         'Never use em dashes. '
         'Avoid generic filler. '
         'Keep it grounded in the supplied deal context and methodology. '
@@ -680,6 +684,8 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         'next_step': next_step,
         'summary': unlocked_summary(parts, methodology),
         'gaps': gaps,
+        'email_audience': 'customer',
+        'seller_goal': 'send the next external email to the customer that helps collect missing deal information and move the opportunity forward',
         'deal_text': raw_text[:8000],
     }
     payload = {

@@ -102,3 +102,16 @@ pre {
   .metric.hero-score { grid-template-columns: 1fr; }
   .topbar { flex-direction: column; }
 }
+
+.loading-status {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px dashed #7c3aed;
+  background: rgba(76,29,149,.16);
+  color: #f5d0fe;
+  font-weight: 700;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+}

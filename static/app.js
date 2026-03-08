@@ -39,6 +39,8 @@ const loadingMessages = [
 
 let loadingInterval = null;
 let loadingMessageIndex = 0;
+let latestAnalysis = null;
+let unlocked = false;
 
 function startLoadingStatus() {
   if (!loadingStatus) return;
@@ -63,10 +65,6 @@ function stopLoadingStatus() {
   }
 }
 
-
-let latestAnalysis = null;
-let unlocked = false;
-
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -76,9 +74,9 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-function renderList(items) {
-  if (!items || !items.length) return '<div class="helper">None detected.</div>';
-  return `<ul>${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
+function renderList(items, cls = '') {
+  if (!items || !items.length) return `<div class="helper ${cls}">None detected.</div>`;
+  return `<ul class="${cls}">${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
 }
 
 function copyText(text, successText = 'Copied.') {
@@ -87,6 +85,29 @@ function copyText(text, successText = 'Copied.') {
 
 function buildShareText(data) {
   return `Just ran a deal through Pipe Checker.\n\nMethodology: ${data.methodology_label}\nScore: ${data.overall_score}/100\nStage: ${data.stage}\n${data.benchmark_text}\n\nTry it: ${window.location.origin}`;
+}
+
+function scoreTone(score) {
+  if (score >= 81) return 'Strong opportunity';
+  if (score >= 61) return 'Qualified but still risky';
+  if (score >= 41) return 'Risky deal';
+  return 'Pipe fully clogged';
+}
+
+function renderUsageBars(usage, methodology) {
+  const active = methodology === 'meddpicc' ? 'meddpicc' : 'bant';
+  return `
+    <div class="usage-stack">
+      <div class="usage-row ${active === 'bant' ? 'active' : ''}">
+        <div class="usage-top"><span>BANT</span><span>${usage.bant_pct || 0}% · ${usage.bant_count || 0} runs</span></div>
+        <div class="usage-track"><span style="width:${usage.bant_pct || 0}%"></span></div>
+      </div>
+      <div class="usage-row ${active === 'meddpicc' ? 'active' : ''}">
+        <div class="usage-top"><span>MEDDPICC</span><span>${usage.meddpicc_pct || 0}% · ${usage.meddpicc_count || 0} runs</span></div>
+        <div class="usage-track"><span style="width:${usage.meddpicc_pct || 0}%"></span></div>
+      </div>
+    </div>
+  `;
 }
 
 function renderSignalRows(signals) {
@@ -100,36 +121,67 @@ function renderSignalRows(signals) {
   `).join('')}</div>`;
 }
 
-function renderCategoryCard(name, obj) {
+function renderCategoryAccordion(name, obj, isOpen = false) {
   return `
-    <div class="card">
-      <h3>${escapeHtml(name)} <span class="badge ${obj.status}">${obj.status}</span></h3>
-      <div class="helper" style="margin-bottom:8px;">${escapeHtml(obj.description)}</div>
-      <div class="points-line">${obj.points} / ${obj.max_points} pts</div>
-      <div><strong>Evidence found</strong>${renderList(obj.evidence)}</div>
-      <div><strong>Missing / expected</strong>${renderList(obj.missing)}</div>
-      <div><strong>How to correct</strong><div class="helper" style="margin-top:6px">${escapeHtml(obj.correction)}</div></div>
-      ${renderSignalRows(obj.signals)}
-    </div>
+    <details class="category-accordion" ${isOpen ? 'open' : ''}>
+      <summary>
+        <div>
+          <div class="category-title-row">
+            <span class="category-name">${escapeHtml(name)}</span>
+            <span class="badge ${obj.status}">${obj.status}</span>
+          </div>
+          <div class="category-subcopy">${escapeHtml(obj.description)}</div>
+        </div>
+        <div class="category-score">${obj.points} / ${obj.max_points}</div>
+      </summary>
+      <div class="category-body">
+        <div class="category-columns">
+          <div class="detail-block">
+            <h4>Evidence found</h4>
+            ${renderList(obj.evidence, 'tight-list')}
+          </div>
+          <div class="detail-block">
+            <h4>Missing / expected</h4>
+            ${renderList(obj.missing, 'tight-list')}
+          </div>
+        </div>
+        <div class="detail-block detail-block-full">
+          <h4>How to correct</h4>
+          <p class="helper strong-helper">${escapeHtml(obj.correction)}</p>
+        </div>
+        ${renderSignalRows(obj.signals)}
+      </div>
+    </details>
   `;
 }
 
 function renderUnlockedSection(data) {
   return `
-    <h2 class="section-title">Recommended next step</h2>
-    <div class="card"><strong>${escapeHtml(data.next_step)}</strong><div class="helper" style="margin-top:8px;">${escapeHtml(data.summary_text)}</div></div>
+    <div class="stack-section">
+      <div class="section-kicker">Action plan</div>
+      <div class="card primary-card">
+        <div class="card-heading-row">
+          <div>
+            <h3 class="card-title">Recommended next step</h3>
+            <div class="helper">${escapeHtml(data.summary_text)}</div>
+          </div>
+          <span class="pill">${escapeHtml(data.next_step)}</span>
+        </div>
+      </div>
 
-    <h2 class="section-title">Recommended email</h2>
-    <div class="card">
-      <div class="copy-row"><strong>Subject:</strong> ${escapeHtml(data.email.subject)} <button class="mini-btn" id="copyEmailBtn">Copy</button></div>
-      <pre>${escapeHtml(data.email.body)}</pre>
-      <div class="helper">${data.ai_enabled ? 'AI-assisted rewrite is enabled for this server.' : 'AI fallback is off, so this is using the built-in coaching template.'}</div>
-    </div>
+      <div class="card split-card">
+        <div>
+          <div class="copy-row"><strong>Recommended email</strong><button class="mini-btn" id="copyEmailBtn">Copy</button></div>
+          <div class="subject-line"><span>Subject</span>${escapeHtml(data.email.subject)}</div>
+          <pre>${escapeHtml(data.email.body)}</pre>
+          <div class="helper">${data.ai_enabled ? 'AI-assisted rewrite is enabled for this server.' : 'AI fallback is off, so this is using the built-in coaching template.'}</div>
+        </div>
+      </div>
 
-    <h2 class="section-title">Recommended call script</h2>
-    <div class="card">
-      <div class="copy-row"><strong>Questions to ask</strong><button class="mini-btn" id="copyCallBtn">Copy</button></div>
-      ${renderList(data.call_script)}
+      <div class="card">
+        <div class="copy-row"><strong>Recommended call script</strong><button class="mini-btn" id="copyCallBtn">Copy</button></div>
+        ${renderList(data.call_script, 'tight-list')}
+      </div>
     </div>
   `;
 }
@@ -138,7 +190,7 @@ function renderLockedSection(data) {
   return `
     <div class="card locked-panel" id="lockedPanel">
       <div class="locked-title">🔒 Unlock the follow-up email and deal strategy</div>
-      <div class="helper">Pipe Checker Pro reveals the action plan, recommended email, and call script for this ${escapeHtml(data.methodology_label)} readout. Drop your email to unlock it now and join the waitlist for pipeline-wide analysis.</div>
+      <div class="helper">Pipe Checker Pro reveals the customer-facing next-step email, call script, and action plan for this ${escapeHtml(data.methodology_label)} readout. Drop your email to unlock it now and join the waitlist for pipeline-wide analysis.</div>
       <form id="waitlistForm" class="waitlist-inline">
         <input type="email" id="waitlistEmail" placeholder="Enter your work email" required>
         <button type="submit">Unlock insight</button>
@@ -147,6 +199,20 @@ function renderLockedSection(data) {
       <div id="waitlistMessage" class="helper" style="margin-top:12px;"></div>
     </div>
   `;
+}
+
+function renderLeaderboard(items) {
+  if (!items || !items.length) return '<div class="helper">No leaderboard data yet. Be the first glorious toilet legend today.</div>';
+  return `<div class="leaderboard-list">${items.map(item => `
+    <div class="leaderboard-row">
+      <div class="leaderboard-rank">#${item.rank}</div>
+      <div>
+        <div class="leaderboard-title">${escapeHtml(item.label)}</div>
+        <div class="helper">Top score logged today</div>
+      </div>
+      <div class="leaderboard-score">${item.score}</div>
+    </div>
+  `).join('')}</div>`;
 }
 
 function bindResultActions(data) {
@@ -200,41 +266,78 @@ function renderResults(data) {
   dealCount.textContent = data.deal_count;
 
   const averageText = data.average_score ? `${data.average_score}% avg for ${data.methodology_label} deals` : `First ${data.methodology_label} deal on the board`;
+  const topThresholdText = data.top20_threshold ? `${data.top20_threshold}+ gets you into the top 20% of ${data.methodology_label} runs` : 'Top-20% benchmark will appear after more runs';
   const unlockedHtml = unlocked ? renderUnlockedSection(data) : renderLockedSection(data);
-  const categoriesHtml = Object.entries(data.analysis).map(([name, obj]) => renderCategoryCard(name, obj)).join('');
+  const categoriesHtml = Object.entries(data.analysis).map(([name, obj], idx) => renderCategoryAccordion(name, obj, idx === 0)).join('');
 
   results.innerHTML = `
-    <div class="metric-grid">
-      <div class="metric hero-score">
-        <div class="gif-wrap">
-          <img src="${escapeHtml(data.gif.file)}" alt="${escapeHtml(data.gif.label)}">
-          <div class="gif-caption"><strong>${escapeHtml(data.gif.label)}</strong><br>${escapeHtml(data.gif.caption)}</div>
+    <div class="results-shell">
+      <section class="hero-grid">
+        <div class="hero-card card">
+          <div class="gif-wrap">
+            <img src="${escapeHtml(data.gif.file)}" alt="${escapeHtml(data.gif.label)}">
+            <div class="gif-caption"><strong>${escapeHtml(data.gif.label)}</strong><br>${escapeHtml(data.gif.caption)}</div>
+          </div>
+          <div class="hero-copy">
+            <div class="section-kicker">${escapeHtml(data.methodology_label)} score</div>
+            <div class="score-big">${data.overall_score}<span>/100</span></div>
+            <div class="hero-tone">${escapeHtml(scoreTone(data.overall_score))}</div>
+            <div class="score-sub">${escapeHtml(data.benchmark_text)}</div>
+            <div class="score-actions">
+              <button class="mini-btn" id="shareScoreBtn">Copy share text</button>
+            </div>
+          </div>
         </div>
-        <div>
-          <div class="metric-label">${escapeHtml(data.methodology_label)} Score</div>
-          <div class="score-big">${data.overall_score}<span style="font-size:26px;">/100</span></div>
-          <div class="score-sub">${escapeHtml(data.benchmark_text)}</div>
-          <div class="score-sub">${escapeHtml(averageText)}</div>
-          <div class="score-actions"><button class="mini-btn" id="shareScoreBtn">Copy share text</button></div>
+
+        <div class="snapshot-grid">
+          <div class="metric compact"><div class="metric-label">Stage</div><div class="metric-value">${escapeHtml(data.stage)}</div></div>
+          <div class="metric compact"><div class="metric-label">Confidence</div><div class="metric-value">${escapeHtml(data.confidence)}</div></div>
+          <div class="metric compact"><div class="metric-label">Deals analyzed</div><div class="metric-value">${escapeHtml(String(data.deal_count))}</div></div>
+          <div class="metric compact"><div class="metric-label">Average score</div><div class="metric-value">${escapeHtml(String(data.average_score || 0))}</div><div class="metric-note">${escapeHtml(averageText)}</div></div>
         </div>
+      </section>
+
+      <section class="insights-grid">
+        <div class="card insight-card">
+          <div class="section-kicker">What to do now</div>
+          <h3 class="card-title">${escapeHtml(data.next_step)}</h3>
+          <p class="helper strong-helper">${escapeHtml(data.summary_text)}</p>
+          <div class="helper">${escapeHtml(topThresholdText)}</div>
+        </div>
+
+        <div class="card insight-card">
+          <div class="section-kicker">Methodology usage</div>
+          <h3 class="card-title">What people are using</h3>
+          ${renderUsageBars(data.methodology_usage || {}, data.methodology)}
+        </div>
+
+        <div class="card insight-card">
+          <div class="section-kicker">Leaderboard</div>
+          <h3 class="card-title">Top pipe scores today</h3>
+          ${renderLeaderboard(data.leaderboard_today || [])}
+        </div>
+      </section>
+
+      <section class="stack-section">
+        <div class="section-kicker">Red flags</div>
+        <div class="card">
+          ${renderList(data.red_flags, 'tight-list')}
+        </div>
+      </section>
+
+      ${unlockedHtml}
+
+      <section class="stack-section">
+        <div class="section-kicker">Detailed analysis</div>
+        <div class="accordion-stack">${categoriesHtml}</div>
+      </section>
+
+      <div class="card footer-card">
+        <strong>Want Pipe Checker to audit your entire pipeline automatically?</strong>
+        <div class="helper" style="margin-top:8px;">We're building a version that scans every deal in your CRM and flags weak opportunities before they slip.</div>
+        <div class="helper" style="margin-top:6px;">${unlocked ? 'You already unlocked this deal. Future-you is so brave.' : 'Unlocking the strategy also puts you on the early access list.'}</div>
       </div>
-      <div class="metric"><div class="metric-label">Stage</div><div class="metric-value">${escapeHtml(data.stage)}</div></div>
-      <div class="metric"><div class="metric-label">Confidence</div><div class="metric-value">${escapeHtml(data.confidence)}</div></div>
-      <div class="metric"><div class="metric-label">Deals analyzed</div><div class="metric-value">${escapeHtml(String(data.deal_count))}</div></div>
-    </div>
-
-    <h2 class="section-title">${escapeHtml(data.methodology_label)} analysis</h2>
-    <div class="cards">${categoriesHtml}</div>
-
-    <h2 class="section-title">Red flags</h2>
-    <div class="card">${renderList(data.red_flags)}</div>
-
-    ${unlockedHtml}
-
-    <div class="card" style="margin-top:20px;text-align:center;">
-      <strong>Want Pipe Checker to audit your entire pipeline automatically?</strong>
-      <div class="helper" style="margin-top:8px;">We're building a version that scans every deal in your CRM and flags weak opportunities before they slip.</div>
-      <div class="helper" style="margin-top:6px;">${unlocked ? 'You already unlocked this deal. Future-you is so brave.' : 'Unlocking the strategy also puts you on the early access list.'}</div>
+      <div class="micro-footer">Built by a sales nerd. More tools coming.</div>
     </div>
   `;
 
@@ -276,6 +379,7 @@ clearBtn.addEventListener('click', () => {
   emptyState.style.display = 'flex';
   errorBox.classList.add('hidden');
   stopLoadingStatus();
+  rawText.focus();
 });
 
 rawText.addEventListener('input', () => {

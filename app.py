@@ -9,6 +9,7 @@ import time
 from collections import defaultdict, deque
 from threading import Lock
 from urllib import request as urlrequest
+import math
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'pipe_checker.db')
@@ -355,6 +356,7 @@ def init_db():
     conn = db()
     conn.execute('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS waitlist (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+    conn.execute('CREATE TABLE IF NOT EXISTS analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, methodology TEXT NOT NULL, score INTEGER NOT NULL, stage TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     for key in ['deal_count', 'total_score', 'deal_count_bant', 'total_score_bant', 'deal_count_meddpicc', 'total_score_meddpicc']:
         ensure_stat(conn, key, 0)
     conn.commit()
@@ -379,12 +381,13 @@ def get_average_score(methodology=None):
     return round(total / count) if count else 0
 
 
-def increment_stats(score, methodology):
+def increment_stats(score, methodology, stage):
     conn = db()
     conn.execute("UPDATE stats SET value = value + 1 WHERE key='deal_count'")
     conn.execute("UPDATE stats SET value = value + ? WHERE key='total_score'", (int(score),))
     conn.execute("UPDATE stats SET value = value + 1 WHERE key=?", (f'deal_count_{methodology}',))
     conn.execute("UPDATE stats SET value = value + ? WHERE key=?", (int(score), f'total_score_{methodology}'))
+    conn.execute('INSERT INTO analyses (methodology, score, stage) VALUES (?, ?, ?)', (methodology, int(score), stage))
     conn.commit()
     deal_count = conn.execute("SELECT value FROM stats WHERE key='deal_count'").fetchone()['value']
     method_count = conn.execute("SELECT value FROM stats WHERE key=?", (f'deal_count_{methodology}',)).fetchone()['value']
@@ -392,6 +395,51 @@ def increment_stats(score, methodology):
     conn.close()
     average = round(method_total / method_count) if method_count else 0
     return int(deal_count), int(average)
+
+
+def get_methodology_usage():
+    bant = stat_value('deal_count_bant', 0)
+    meddpicc = stat_value('deal_count_meddpicc', 0)
+    total = bant + meddpicc
+    if total == 0:
+        return {
+            'bant_count': 0, 'meddpicc_count': 0, 'bant_pct': 0, 'meddpicc_pct': 0
+        }
+    return {
+        'bant_count': bant,
+        'meddpicc_count': meddpicc,
+        'bant_pct': round((bant / total) * 100),
+        'meddpicc_pct': round((meddpicc / total) * 100),
+    }
+
+
+def get_top20_threshold(methodology):
+    conn = db()
+    rows = conn.execute('SELECT score FROM analyses WHERE methodology=? ORDER BY score DESC', (methodology,)).fetchall()
+    conn.close()
+    scores = [int(r['score']) for r in rows]
+    if not scores:
+        return 0
+    idx = max(0, math.ceil(len(scores) * 0.2) - 1)
+    return scores[idx]
+
+
+def get_leaderboard_today(limit=5):
+    conn = db()
+    rows = conn.execute(
+        "SELECT methodology, score, stage, created_at FROM analyses WHERE date(created_at)=date('now') ORDER BY score DESC, created_at ASC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    out = []
+    for i, row in enumerate(rows, start=1):
+        out.append({
+            'rank': i,
+            'score': int(row['score']),
+            'label': f"{methodology_title(row['methodology'])} • {row['stage']}",
+            'created_at': row['created_at'],
+        })
+    return out
 
 
 def infer_stage(text):
@@ -855,9 +903,13 @@ def analyze():
     stage_info = infer_stage(raw_text)
     parts, score, _signal_results = analyze_model(raw_text, model)
     step = choose_next_step(parts, stage_info, methodology)
-    deal_count, average_score = increment_stats(score, methodology)
+    deal_count, average_score = increment_stats(score, methodology, stage_info['stage'])
     gif = pick_gif(score)
     email, call_script = ai_email_and_script(raw_text, parts, stage_info, methodology, step)
+
+    usage = get_methodology_usage()
+    top20_threshold = get_top20_threshold(methodology)
+    leaderboard_today = get_leaderboard_today()
 
     result = {
         'methodology': methodology,
@@ -873,6 +925,9 @@ def analyze():
         'email': email,
         'call_script': call_script,
         'deal_count': deal_count,
+        'top20_threshold': top20_threshold,
+        'methodology_usage': usage,
+        'leaderboard_today': leaderboard_today,
         'gif': gif,
         'ai_enabled': bool(OPENAI_API_KEY),
         'summary_text': unlocked_summary(parts, methodology),

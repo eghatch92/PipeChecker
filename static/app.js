@@ -1,4 +1,3 @@
-
 const analyzeBtn = document.getElementById('analyzeBtn');
 const clearBtn = document.getElementById('clearBtn');
 const rawText = document.getElementById('rawText');
@@ -7,6 +6,7 @@ const emptyState = document.getElementById('emptyState');
 const errorBox = document.getElementById('errorBox');
 const dealCount = document.getElementById('dealCount');
 const charCount = document.getElementById('charCount');
+const methodologySelect = document.getElementById('methodology');
 
 let latestAnalysis = null;
 let unlocked = false;
@@ -25,36 +25,49 @@ function renderList(items) {
   return `<ul>${items.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>`;
 }
 
-function renderBantCard(name, obj) {
-  return `
-    <div class="card">
-      <h3>${name} <span class="badge ${obj.status}">${obj.status}</span></h3>
-      <div><strong>Evidence found</strong>${renderList(obj.evidence)}</div>
-      <div><strong>Missing / expected</strong>${renderList(obj.missing)}</div>
-      <div><strong>How to correct</strong><div class="helper" style="margin-top:6px">${escapeHtml(obj.correction)}</div></div>
-    </div>
-  `;
-}
-
 function copyText(text, successText = 'Copied.') {
   navigator.clipboard.writeText(text).then(() => alert(successText)).catch(() => {});
 }
 
 function buildShareText(data) {
-  return `Just ran a deal through Pipe Checker.\n\nScore: ${data.overall_score}/100\nStage: ${data.stage}\n${data.benchmark_text}\n\nTry it: ${window.location.origin}`;
+  return `Just ran a deal through Pipe Checker.\n\nMethodology: ${data.methodology_label}\nScore: ${data.overall_score}/100\nStage: ${data.stage}\n${data.benchmark_text}\n\nTry it: ${window.location.origin}`;
+}
+
+function renderSignalRows(signals) {
+  if (!signals || !signals.length) return '';
+  return `<div class="signal-grid">${signals.map(sig => `
+    <div class="signal-row">
+      <div class="signal-top"><span>${escapeHtml(sig.name)}</span><span class="tiny-badge ${sig.status}">${escapeHtml(sig.status)}</span></div>
+      <div class="signal-points">${sig.points} / ${sig.max_points} pts</div>
+      <div class="signal-hint">${escapeHtml(sig.missing_hint)}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderCategoryCard(name, obj) {
+  return `
+    <div class="card">
+      <h3>${escapeHtml(name)} <span class="badge ${obj.status}">${obj.status}</span></h3>
+      <div class="helper" style="margin-bottom:8px;">${escapeHtml(obj.description)}</div>
+      <div class="points-line">${obj.points} / ${obj.max_points} pts</div>
+      <div><strong>Evidence found</strong>${renderList(obj.evidence)}</div>
+      <div><strong>Missing / expected</strong>${renderList(obj.missing)}</div>
+      <div><strong>How to correct</strong><div class="helper" style="margin-top:6px">${escapeHtml(obj.correction)}</div></div>
+      ${renderSignalRows(obj.signals)}
+    </div>
+  `;
 }
 
 function renderUnlockedSection(data) {
-  const emailBody = `Subject: ${data.email.subject}\n\n${data.email.body}`;
-  const callBody = data.call_script.join('\n');
   return `
     <h2 class="section-title">Recommended next step</h2>
-    <div class="card"><strong>${escapeHtml(data.next_step)}</strong></div>
+    <div class="card"><strong>${escapeHtml(data.next_step)}</strong><div class="helper" style="margin-top:8px;">${escapeHtml(data.summary_text)}</div></div>
 
     <h2 class="section-title">Recommended email</h2>
     <div class="card">
       <div class="copy-row"><strong>Subject:</strong> ${escapeHtml(data.email.subject)} <button class="mini-btn" id="copyEmailBtn">Copy</button></div>
       <pre>${escapeHtml(data.email.body)}</pre>
+      <div class="helper">${data.ai_enabled ? 'AI-assisted rewrite is enabled for this server.' : 'AI fallback is off, so this is using the built-in coaching template.'}</div>
     </div>
 
     <h2 class="section-title">Recommended call script</h2>
@@ -65,11 +78,11 @@ function renderUnlockedSection(data) {
   `;
 }
 
-function renderLockedSection() {
+function renderLockedSection(data) {
   return `
     <div class="card locked-panel" id="lockedPanel">
       <div class="locked-title">🔒 Unlock the follow-up email and deal strategy</div>
-      <div class="helper">Pipe Checker Pro reveals the action plan, recommended email, and call script for this deal. Drop your email to unlock it now and join the waitlist for pipeline-wide analysis.</div>
+      <div class="helper">Pipe Checker Pro reveals the action plan, recommended email, and call script for this ${escapeHtml(data.methodology_label)} readout. Drop your email to unlock it now and join the waitlist for pipeline-wide analysis.</div>
       <form id="waitlistForm" class="waitlist-inline">
         <input type="email" id="waitlistEmail" placeholder="Enter your work email" required>
         <button type="submit">Unlock insight</button>
@@ -82,9 +95,7 @@ function renderLockedSection() {
 
 function bindResultActions(data) {
   const shareBtn = document.getElementById('shareScoreBtn');
-  if (shareBtn) {
-    shareBtn.addEventListener('click', () => copyText(buildShareText(data), 'Share text copied. Paste it into LinkedIn or X.'));
-  }
+  if (shareBtn) shareBtn.addEventListener('click', () => copyText(buildShareText(data), 'Share text copied. Paste it into LinkedIn or X.'));
 
   const copyEmailBtn = document.getElementById('copyEmailBtn');
   if (copyEmailBtn) {
@@ -93,9 +104,7 @@ function bindResultActions(data) {
   }
 
   const copyCallBtn = document.getElementById('copyCallBtn');
-  if (copyCallBtn) {
-    copyCallBtn.addEventListener('click', () => copyText(data.call_script.join('\n'), 'Call script copied.'));
-  }
+  if (copyCallBtn) copyCallBtn.addEventListener('click', () => copyText(data.call_script.join('\n'), 'Call script copied.'));
 
   const waitlistForm = document.getElementById('waitlistForm');
   if (waitlistForm) {
@@ -134,8 +143,9 @@ function renderResults(data) {
   results.classList.remove('hidden');
   dealCount.textContent = data.deal_count;
 
-  const averageText = data.average_score ? `${data.average_score}% avg across all analyzed deals` : 'First deal on the board';
-  const unlockedHtml = unlocked ? renderUnlockedSection(data) : renderLockedSection();
+  const averageText = data.average_score ? `${data.average_score}% avg for ${data.methodology_label} deals` : `First ${data.methodology_label} deal on the board`;
+  const unlockedHtml = unlocked ? renderUnlockedSection(data) : renderLockedSection(data);
+  const categoriesHtml = Object.entries(data.analysis).map(([name, obj]) => renderCategoryCard(name, obj)).join('');
 
   results.innerHTML = `
     <div class="metric-grid">
@@ -145,13 +155,11 @@ function renderResults(data) {
           <div class="gif-caption"><strong>${escapeHtml(data.gif.label)}</strong><br>${escapeHtml(data.gif.caption)}</div>
         </div>
         <div>
-          <div class="metric-label">Pipe Checker Score</div>
+          <div class="metric-label">${escapeHtml(data.methodology_label)} Score</div>
           <div class="score-big">${data.overall_score}<span style="font-size:26px;">/100</span></div>
           <div class="score-sub">${escapeHtml(data.benchmark_text)}</div>
           <div class="score-sub">${escapeHtml(averageText)}</div>
-          <div class="score-actions">
-            <button class="mini-btn" id="shareScoreBtn">Copy share text</button>
-          </div>
+          <div class="score-actions"><button class="mini-btn" id="shareScoreBtn">Copy share text</button></div>
         </div>
       </div>
       <div class="metric"><div class="metric-label">Stage</div><div class="metric-value">${escapeHtml(data.stage)}</div></div>
@@ -159,13 +167,8 @@ function renderResults(data) {
       <div class="metric"><div class="metric-label">Deals analyzed</div><div class="metric-value">${escapeHtml(String(data.deal_count))}</div></div>
     </div>
 
-    <h2 class="section-title">BANT analysis</h2>
-    <div class="cards">
-      ${renderBantCard('Budget', data.bant.Budget)}
-      ${renderBantCard('Authority', data.bant.Authority)}
-      ${renderBantCard('Need', data.bant.Need)}
-      ${renderBantCard('Timeline', data.bant.Timeline)}
-    </div>
+    <h2 class="section-title">${escapeHtml(data.methodology_label)} analysis</h2>
+    <div class="cards">${categoriesHtml}</div>
 
     <h2 class="section-title">Red flags</h2>
     <div class="card">${renderList(data.red_flags)}</div>
@@ -191,7 +194,7 @@ analyzeBtn.addEventListener('click', async () => {
     const res = await fetch('/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw_text: rawText.value })
+      body: JSON.stringify({ raw_text: rawText.value, methodology: methodologySelect.value })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Analysis failed.');

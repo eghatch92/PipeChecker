@@ -17,6 +17,8 @@ ADMIN_EXPORT_KEY = os.environ.get('ADMIN_EXPORT_KEY', 'change-this-now')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5-mini')
 OPENAI_TIMEOUT_SECONDS = int(os.environ.get('OPENAI_TIMEOUT_SECONDS', '25'))
+AI_MAX_PER_HOUR = int(os.environ.get('AI_MAX_PER_HOUR', '50'))
+AI_LIMIT_MESSAGE = os.environ.get('AI_LIMIT_MESSAGE', 'AI coaching temporarily exhausted for this hour. Try again soon.')
 MAX_INPUT_CHARS = int(os.environ.get('MAX_INPUT_CHARS', '50000'))
 ANALYZE_RATE_LIMIT = int(os.environ.get('ANALYZE_RATE_LIMIT', '12'))
 RATE_WINDOW_SECONDS = int(os.environ.get('RATE_WINDOW_SECONDS', '600'))
@@ -26,6 +28,8 @@ app.config['MAX_CONTENT_LENGTH'] = 512 * 1024
 
 RATE_STATE = defaultdict(deque)
 RATE_LOCK = Lock()
+AI_CALLS = deque()
+AI_LOCK = Lock()
 
 STAGE_PATTERNS = [
     (r'closed\s*won|contract\s*signed|signature|signed order form', 'Closed Won', 6),
@@ -274,6 +278,21 @@ def rate_limit_check(bucket_key: str, limit: int, window_seconds: int):
             return False, retry_after
         bucket.append(now)
     return True, None
+
+
+
+
+def ai_limit_check():
+    now = time.time()
+    if AI_MAX_PER_HOUR <= 0:
+        return False
+    with AI_LOCK:
+        while AI_CALLS and now - AI_CALLS[0] > 3600:
+            AI_CALLS.popleft()
+        if len(AI_CALLS) >= AI_MAX_PER_HOUR:
+            return False
+        AI_CALLS.append(now)
+        return True
 
 
 def split_sentences(text):
@@ -635,6 +654,11 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
 def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
     if not OPENAI_API_KEY:
         return fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
+    if not ai_limit_check():
+        fallback_email, fallback_script = fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
+        fallback_email['subject'] = 'AI hourly limit reached'
+        fallback_email['body'] = AI_LIMIT_MESSAGE + '\n\n' + fallback_email['body']
+        return fallback_email, fallback_script
 
     gaps = []
     for category, val in parts.items():

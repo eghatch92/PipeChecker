@@ -1,4 +1,7 @@
-from flask import Flask, render_template, request, jsonify
+
+from flask import Flask, render_template, request, jsonify, Response
+import csv
+import io
 import os
 import re
 import sqlite3
@@ -9,12 +12,13 @@ from threading import Lock
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'pipe_checker.db')
 DB_PATH = os.environ.get('DB_PATH', DEFAULT_DB_PATH)
+ADMIN_EXPORT_KEY = os.environ.get('ADMIN_EXPORT_KEY', 'change-this-now')
 MAX_INPUT_CHARS = int(os.environ.get('MAX_INPUT_CHARS', '50000'))
 ANALYZE_RATE_LIMIT = int(os.environ.get('ANALYZE_RATE_LIMIT', '12'))
 RATE_WINDOW_SECONDS = int(os.environ.get('RATE_WINDOW_SECONDS', '600'))
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 512 * 1024  # 512 KB request cap
+app.config['MAX_CONTENT_LENGTH'] = 512 * 1024
 
 RATE_STATE = defaultdict(deque)
 RATE_LOCK = Lock()
@@ -53,6 +57,13 @@ TIMELINE_HINTS = [
 ]
 
 NEGATION_WORDS = ['unknown', 'not sure', 'tbd', 'unclear', 'none', 'no budget', 'no timeline', 'not mentioned']
+
+GIF_CONFIG = [
+    {'max': 24, 'file': '/static/gifs/pipe_catastrophe.gif', 'label': 'Catastrophic blowout', 'caption': 'This pipe is spraying everywhere. Absolute poop emergency.'},
+    {'max': 49, 'file': '/static/gifs/pipe_mega_clog.gif', 'label': 'Mega clog', 'caption': 'The turds are stacked to the ceiling. Somebody call maintenance.'},
+    {'max': 74, 'file': '/static/gifs/pipe_wobbly_flow.gif', 'label': 'Wobbly flow', 'caption': 'Still poopy, but at least the toilet is making an effort.'},
+    {'max': 100, 'file': '/static/gifs/pipe_cleanish.gif', 'label': 'Mostly unpooped', 'caption': 'Not pristine, but the poop goblin is losing ground.'},
+]
 
 
 def client_ip():
@@ -107,27 +118,46 @@ def db():
 def init_db():
     conn = db()
     conn.execute('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL)')
-    cur = conn.execute("SELECT value FROM stats WHERE key='deal_count'")
-    if cur.fetchone() is None:
-        conn.execute("INSERT INTO stats (key, value) VALUES ('deal_count', 0)")
+    conn.execute('CREATE TABLE IF NOT EXISTS waitlist (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
+    defaults = {
+        'deal_count': 0,
+        'total_score': 0,
+    }
+    for key, value in defaults.items():
+        cur = conn.execute('SELECT value FROM stats WHERE key=?', (key,))
+        if cur.fetchone() is None:
+            conn.execute('INSERT INTO stats (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
     conn.close()
+
+
+def stat_value(key, default=0):
+    conn = db()
+    row = conn.execute('SELECT value FROM stats WHERE key=?', (key,)).fetchone()
+    conn.close()
+    return int(row['value']) if row else default
 
 
 def get_count():
-    conn = db()
-    row = conn.execute("SELECT value FROM stats WHERE key='deal_count'").fetchone()
-    conn.close()
-    return int(row['value']) if row else 0
+    return stat_value('deal_count', 0)
 
 
-def increment_count():
+def get_average_score():
+    count = stat_value('deal_count', 0)
+    total = stat_value('total_score', 0)
+    return round(total / count) if count else 0
+
+
+def increment_stats(score):
     conn = db()
     conn.execute("UPDATE stats SET value = value + 1 WHERE key='deal_count'")
+    conn.execute("UPDATE stats SET value = value + ? WHERE key='total_score'", (int(score),))
     conn.commit()
-    row = conn.execute("SELECT value FROM stats WHERE key='deal_count'").fetchone()
+    count = conn.execute("SELECT value FROM stats WHERE key='deal_count'").fetchone()['value']
+    total = conn.execute("SELECT value FROM stats WHERE key='total_score'").fetchone()['value']
     conn.close()
-    return int(row['value'])
+    average = round(total / count) if count else 0
+    return int(count), int(average)
 
 
 def extract_matches(text, patterns, label):
@@ -155,7 +185,7 @@ def extract_matches(text, patterns, label):
     elif label == 'Authority':
         missing = [
             'Named members of the buying committee',
-            'Each member\'s role in approval',
+            "Each member's role in approval",
             'Who can block or accelerate the deal'
         ]
         correction = 'Map the buying committee by name and role, then confirm who must be involved before the deal can progress.'
@@ -317,6 +347,28 @@ def confidence_label(stage_info, parts):
     return 'Low'
 
 
+def score_benchmark_text(score, average):
+    if average == 0:
+        return 'This is the first deal analyzed. You are the official poop pioneer.'
+    delta = score - average
+    if delta >= 15:
+        return f'This deal is smoking the average by {delta} points. The poop is mostly under control.'
+    if delta >= 1:
+        return f'This deal is {delta} points above the current average. Light pooping only.'
+    if delta == 0:
+        return 'This deal is exactly average. Perfectly mid poop situation.'
+    if delta <= -15:
+        return f'This deal is {abs(delta)} points below average. The pipe goblin is winning.'
+    return f'This deal is {abs(delta)} points below average. There is still poop in the elbow joint.'
+
+
+def pick_gif(score):
+    for item in GIF_CONFIG:
+        if score <= item['max']:
+            return item
+    return GIF_CONFIG[-1]
+
+
 @app.after_request
 def add_headers(response):
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -337,6 +389,16 @@ def too_many(_error):
     return jsonify({'error': 'Too many requests. Wait a few minutes and try again.'}), 429
 
 
+@app.errorhandler(404)
+def not_found(_error):
+    return jsonify({'error': 'Not found.'}), 404
+
+
+@app.route('/favicon.ico')
+def favicon():
+    return '', 204
+
+
 @app.errorhandler(Exception)
 def handle_generic_error(_error):
     app.logger.exception('Unhandled server error')
@@ -351,6 +413,91 @@ def index():
 @app.route('/healthz')
 def healthz():
     return {'status': 'ok'}, 200
+
+
+@app.route('/waitlist', methods=['POST'])
+def waitlist():
+    email = ((request.form.get('email') if request.form else None) or '').strip().lower()
+    if not email or '@' not in email or '.' not in email:
+        return jsonify({'status': 'invalid', 'error': 'That email did not look valid. Please try again.'}), 400
+
+    conn = db()
+    try:
+        conn.execute('INSERT INTO waitlist (email) VALUES (?)', (email,))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass
+    finally:
+        conn.close()
+
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/waitlist-export', methods=['GET'])
+def waitlist_export():
+    key = request.args.get('key')
+    if key != ADMIN_EXPORT_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    conn = db()
+    rows = conn.execute('SELECT email, created_at FROM waitlist ORDER BY created_at DESC').fetchall()
+    conn.close()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['email', 'created_at'])
+    writer.writerows([[row['email'], row['created_at']] for row in rows])
+
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': 'attachment; filename=pipe_checker_waitlist.csv'}
+    )
+
+
+@app.route('/waitlist-view', methods=['GET'])
+def waitlist_view():
+    key = request.args.get('key')
+    if key != ADMIN_EXPORT_KEY:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    conn = db()
+    rows = conn.execute('SELECT email, created_at FROM waitlist ORDER BY created_at DESC').fetchall()
+    conn.close()
+
+    html = """
+    <html>
+    <head>
+        <title>Pipe Checker Waitlist</title>
+        <style>
+            body { font-family: Arial, sans-serif; padding: 24px; }
+            table { border-collapse: collapse; width: 100%; max-width: 900px; }
+            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+            th { background: #f5f5f5; }
+        </style>
+    </head>
+    <body>
+        <h1>Pipe Checker Waitlist</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Email</th>
+                    <th>Created At</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+
+    for row in rows:
+        html += f"<tr><td>{row['email']}</td><td>{row['created_at']}</td></tr>"
+
+    html += """
+            </tbody>
+        </table>
+    </body>
+    </html>
+    """
+    return html
 
 
 @app.route('/analyze', methods=['POST'])
@@ -379,9 +526,14 @@ def analyze():
         'Timeline': extract_matches(raw_text, TIMELINE_HINTS, 'Timeline'),
     }
     step = choose_next_step(parts, stage_info)
+    score = overall_score(parts)
+    deal_count, average_score = increment_stats(score)
+    gif = pick_gif(score)
 
     result = {
-        'overall_score': overall_score(parts),
+        'overall_score': score,
+        'average_score': average_score,
+        'benchmark_text': score_benchmark_text(score, average_score),
         'stage': stage_info['stage'],
         'confidence': confidence_label(stage_info, parts),
         'bant': parts,
@@ -389,7 +541,8 @@ def analyze():
         'next_step': step,
         'email': build_email(step),
         'call_script': build_call_script(step),
-        'deal_count': increment_count(),
+        'deal_count': deal_count,
+        'gif': gif,
     }
     return jsonify(result)
 

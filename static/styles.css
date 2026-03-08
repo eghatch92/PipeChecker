@@ -47,7 +47,9 @@ button, input, select, textarea { font: inherit; }
   width: 58px;
   height: 58px;
   border-radius: 14px;
-  object-fit: cover;
+  object-fit: contain;
+  background: rgba(255,255,255,0.92);
+  padding: 2px;
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
 }
@@ -80,6 +82,9 @@ button, input, select, textarea { font: inherit; }
   width: min(320px, 42vw);
   max-height: 120px;
   object-fit: contain;
+  background: rgba(255,255,255,0.96);
+  border-radius: 14px;
+  padding: 10px 14px;
   filter: drop-shadow(0 12px 26px rgba(0,0,0,.2));
 }
 
@@ -90,6 +95,27 @@ button, input, select, textarea { font: inherit; }
   gap: 18px;
   padding: 28px 0 18px;
 }
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.contact-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(10, 18, 34, 0.78);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 800;
+  box-shadow: var(--shadow);
+}
+.contact-btn:hover { transform: translateY(-1px); }
 
 .header-copy h1 {
   margin: 0 0 8px;
@@ -290,7 +316,7 @@ button:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
 
 .hero-card {
   display: grid;
-  grid-template-columns: 132px 1fr;
+  grid-template-columns: 180px 1fr;
   gap: 18px;
   padding: 18px;
   align-items: center;
@@ -302,8 +328,9 @@ button:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
 }
 .gif-wrap img {
   width: 100%;
-  aspect-ratio: 1 / 1;
-  object-fit: cover;
+  height: 180px;
+  object-fit: contain;
+  background: rgba(2, 6, 23, 0.72);
   border-radius: 14px;
   border: 1px solid var(--line);
 }
@@ -719,4 +746,21 @@ pre {
     width: 48px;
     height: 48px;
   }
+}
+
+.footer-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: center;
+}
+.footer-actions .contact-btn {
+  box-shadow: none;
+  background: rgba(2, 6, 23, 0.72);
+}
+
+@media (max-width: 760px) {
+  .header-actions { width: 100%; justify-content: space-between; }
+  .site-header { flex-direction: column; }
+  .hero-card { grid-template-columns: 1fr; }
+  .gif-wrap img { height: 220px; }
 }

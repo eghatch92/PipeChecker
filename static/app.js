@@ -409,6 +409,7 @@ function renderResults(data) {
         <strong>Want Pipe Checker to audit your entire pipeline automatically?</strong>
         <div class="helper" style="margin-top:8px;">We're building a version that scans every deal in your CRM and flags weak opportunities before they slip.</div>
         <div class="helper" style="margin-top:6px;">${unlocked ? 'You already unlocked this deal. Future-you is so brave.' : 'Unlocking the strategy also puts you on the early access list.'}</div>
+        <div class="footer-actions"><a class="contact-btn" href="mailto:info@littlepostmanager.com?subject=PipeChecker%20question">Need help? Contact us</a></div>
       </div>
       <div class="micro-footer">Built by a sales nerd. More tools coming.</div>
     </div>`;

@@ -37,6 +37,22 @@ const loadingMessages = [
   'Asking the pipe spirit for guidance...'
 ];
 
+const unlockLoadingMessages = [
+  'Cranking up the poop-powered email engine...',
+  'Fishing a follow-up out of the sewer...',
+  'Polishing your customer email with a toilet brush...',
+  'Running the courtesy flush on your call script...',
+  'Shaking loose a better question from the pipes...',
+  'Spraying air freshener on the follow-up draft...',
+  'Poking the blockage until the email makes sense...',
+  'Checking whether procurement clogged the sentence...',
+  'Flushing out internal-sounding nonsense...',
+  'Translating poop thoughts into customer words...',
+  'Looking for one good open-ended question...',
+  'De-goblinizing the approval workflow ask...'
+];
+
+
 let loadingInterval = null;
 let loadingMessageIndex = 0;
 let latestAnalysis = null;
@@ -45,14 +61,15 @@ let detailFilter = 'all';
 let latestRawText = '';
 let latestMethodology = 'bant';
 
-function startLoadingStatus() {
-  loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
-  loadingStatus.textContent = loadingMessages[loadingMessageIndex];
+function startLoadingStatus(messages = loadingMessages) {
+  const activeMessages = messages && messages.length ? messages : loadingMessages;
+  loadingMessageIndex = Math.floor(Math.random() * activeMessages.length);
+  loadingStatus.textContent = activeMessages[loadingMessageIndex];
   loadingStatus.classList.remove('hidden');
   clearInterval(loadingInterval);
   loadingInterval = setInterval(() => {
-    loadingMessageIndex = (loadingMessageIndex + 1) % loadingMessages.length;
-    loadingStatus.textContent = loadingMessages[loadingMessageIndex];
+    loadingMessageIndex = (loadingMessageIndex + 1) % activeMessages.length;
+    loadingStatus.textContent = activeMessages[loadingMessageIndex];
   }, 1500);
 }
 
@@ -281,7 +298,13 @@ function bindResultActions(data) {
       const msg = document.getElementById('waitlistMessage');
       const email = (emailInput.value || '').trim();
       msg.textContent = 'Generating email and call script...';
-      startLoadingStatus();
+      msg.classList.remove('success-text');
+      const submitBtn = waitlistForm.querySelector('button[type="submit"]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Generating...';
+      }
+      startLoadingStatus(unlockLoadingMessages);
       try {
         const res = await fetch('/waitlist', {
           method: 'POST',
@@ -292,7 +315,11 @@ function bindResultActions(data) {
             'methodology=' + encodeURIComponent(latestMethodology)
           ].join('&')
         });
-        const payload = await res.json().catch(() => ({}));
+        const contentType = res.headers.get('content-type') || '';
+        const payload = contentType.includes('application/json')
+          ? await res.json()
+          : { error: 'Server returned a non-JSON response. Please try again.' };
+
         if (res.ok) {
           if (payload.email && payload.call_script) {
             latestAnalysis = {
@@ -312,6 +339,10 @@ function bindResultActions(data) {
         msg.textContent = 'Something went wrong. Please try again.';
       } finally {
         stopLoadingStatus();
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Get email + call script';
+        }
       }
     });
   }

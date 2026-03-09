@@ -699,6 +699,8 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "Do not address 'team'.\n"
         "Do not mention BANT, MEDDPICC, pipeline, forecast, internal review, or manager coaching.\n"
         "Write as the seller sending the next external email directly to the customer.\n"
+        "Return a send-ready customer email, not writing instructions or coaching steps.\n"
+        "Do not include section labels, 'Step 1/2/3', or commentary about what to write.\n"
         "Keep the email under 170 words.\n"
         "Keep the subject under 8 words.\n"
         "Keep each call-script line under 16 words.\n"
@@ -708,6 +710,7 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "Section 3: ask exactly one open-ended question.\n"
         "Do not ask multiple questions.\n"
         "Do not include bullet points in the email.\n"
+        "Use natural email paragraphs only, as if this will be sent immediately.\n"
         "The call script must contain only live talk-track questions or prompts.\n"
         "The call script must not include SUBJECT or EMAIL labels.\n"
         "Use exactly this format:\n"
@@ -781,6 +784,9 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
 
         subject = subject_match.group(1).strip() if subject_match else fallback_email['subject']
         body = email_match.group(1).strip() if email_match else fallback_email['body']
+        body = re.sub(r'^\s*(?:section|step)\s*\d+\s*[:\-]\s*', '', body, flags=re.I | re.M)
+        body = re.sub(r'^\s*section\s*[123]\s*[:\-]\s*', '', body, flags=re.I | re.M)
+        body = re.sub(r'\n{3,}', '\n\n', body).strip()
 
         call_script = []
         if script_match:

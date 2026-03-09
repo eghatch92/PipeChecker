@@ -17,7 +17,7 @@ DB_PATH = os.environ.get('DB_PATH', DEFAULT_DB_PATH)
 ADMIN_EXPORT_KEY = os.environ.get('ADMIN_EXPORT_KEY', 'change-this-now')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5-mini')
-OPENAI_TIMEOUT_SECONDS = int(os.environ.get('OPENAI_TIMEOUT_SECONDS', '25'))
+OPENAI_TIMEOUT_SECONDS = int(os.environ.get('OPENAI_TIMEOUT_SECONDS', '60'))
 AI_MAX_PER_HOUR = int(os.environ.get('AI_MAX_PER_HOUR', '50'))
 AI_LIMIT_MESSAGE = os.environ.get('AI_LIMIT_MESSAGE', 'AI coaching temporarily exhausted for this hour. Try again soon.')
 MAX_INPUT_CHARS = int(os.environ.get('MAX_INPUT_CHARS', '50000'))
@@ -281,8 +281,6 @@ def rate_limit_check(bucket_key: str, limit: int, window_seconds: int):
     return True, None
 
 
-
-
 def ai_limit_check():
     now = time.time()
     if AI_MAX_PER_HOUR <= 0:
@@ -465,7 +463,6 @@ def signal_strength(text, signal):
         evidence = partial_hits
         points = max(1, round(signal['weight'] * 0.45))
 
-    # MEDDPICC metric hard-number guardrails
     if signal['name'] == 'Hard number present' and not has_hard_number(text):
         status, points, evidence = 'Missing', 0, []
     if signal['name'] == 'Metric is specific, not generic':
@@ -657,93 +654,131 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
     weak = [name for name, val in parts.items() if val['status'] != 'Complete']
     primary = weak[0] if weak else ('Budget' if methodology == 'bant' else 'Metrics')
     missing = parts[primary]['missing'][:3]
-    subject = {
+
+    name_match = re.search(r'\b(?:met with|spoke with|talked to|meeting with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', raw_text)
+    customer_name = name_match.group(1).split()[0] if name_match else None
+    greeting = f'Hi {customer_name},' if customer_name else 'Hi there,'
+
+    subject_map = {
         'bant': {
-            'Understand Budget': 'Quick alignment on budget process',
+            'Understand Budget': 'Quick question on approval and budget',
             'Map Buying Committee': 'Quick alignment on who should be involved',
-            'Quantify Need': 'Confirming the business impact and target outcome',
-            'Lock Timeline': 'Working backward from your target close date',
-            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
+            'Quantify Need': 'Confirming the business outcome you want to drive',
+            'Lock Timeline': 'Working backward from your target timing',
+            'Advance to Mutual Action Plan': 'Proposed next steps',
         },
         'meddpicc': {
-            'Tighten Metrics': 'Confirming the exact numbers behind this initiative',
-            'Map Economic Buyer': 'Clarifying economic buyer and priorities',
-            'Clarify Decision Criteria': 'Confirming the technical boxes that matter most',
+            'Tighten Metrics': 'Confirming the exact outcome you want to drive',
+            'Map Economic Buyer': 'Quick alignment on decision ownership',
+            'Clarify Decision Criteria': 'Clarifying the requirements that matter most',
             'Map Decision Process': 'Aligning on decision path and timing',
             'Map Paper Process': 'Clarifying contract and approval steps',
-            'Deepen Pain': 'Confirming the current state and desired outcome',
-            'Test Champion': 'Making sure we have the right internal support',
-            'Pressure-Test Competition': 'Pressure-testing alternatives and competing priorities',
-            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
+            'Deepen Pain': 'Confirming the current challenge and desired outcome',
+            'Test Champion': 'Making sure we have the right people involved',
+            'Pressure-Test Competition': 'Pressure-testing alternatives and priorities',
+            'Advance to Mutual Action Plan': 'Proposed next steps',
         }
     }
-    subj = subject[methodology].get(next_step, 'Aligning on next steps')
-    ask_lines = '\n'.join([f'- {item}' for item in missing]) if missing else '- Confirm the remaining decision gaps'
-    email = (
-        'Hi team,\n\n'
-        f'To keep this moving, I want to make sure we close the remaining {methodology_title(methodology)} gaps before the next forecast conversation. '
-        f'Right now the biggest area to tighten is {primary}.\n\n'
-        'The fastest way to do that would be to confirm:\n'
-        f'{ask_lines}\n\n'
-        f'If helpful, I can keep the next conversation tight and focused so we can get this into a cleaner stage than {stage_info["stage"]}.\n\n'
-        'Best,'
+
+    subj = subject_map[methodology].get(next_step, 'Aligning on next steps')
+    bullet_block = '\n'.join([f'- {item}' for item in missing]) if missing else '- Confirm the remaining decision details'
+
+    body = (
+        f'{greeting}\n\n'
+        'I want to make sure we have the right people and information in place before we move this forward.\n\n'
+        'From what we have discussed so far, it would help to clarify:\n'
+        f'{bullet_block}\n\n'
+        'Would you be open to a short call next week so we can map this out together and keep momentum going?\n\n'
+        'Best,\n'
+        '[Your Name]'
     )
+
     script = [
-        f'Before we move this past {stage_info["stage"]}, I want to pressure-test {primary}.',
+        'Before we move this forward, I want to make sure we have the right people involved.',
     ] + missing[:3]
+
     if not missing:
         script += [
             'What could still get in the way between now and signature?',
             'Who else should we involve now so the process stays smooth?'
         ]
-    return {'subject': subj, 'body': email}, script
+
+    return {'subject': subj, 'body': body}, script
 
 
 def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
+    fallback_email, fallback_script = fallback_email_and_script(
+        raw_text, parts, stage_info, methodology, next_step
+    )
+
     if not OPENAI_API_KEY:
-        return fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
+        return fallback_email, fallback_script
+
     if not ai_limit_check():
-        fallback_email, fallback_script = fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
         fallback_email['subject'] = 'AI hourly limit reached'
         fallback_email['body'] = AI_LIMIT_MESSAGE + '\n\n' + fallback_email['body']
         return fallback_email, fallback_script
 
     gaps = []
+    customer_name = None
+
+    name_match = re.search(r'\b(?:met with|spoke with|talked to|meeting with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', raw_text)
+    if name_match:
+        customer_name = name_match.group(1).strip()
+
     for category, val in parts.items():
         if val['status'] != 'Complete':
-            gaps.append({'category': category, 'missing': val['missing'][:4], 'evidence': val['evidence'][:2], 'status': val['status']})
+            gaps.append({
+                'category': category,
+                'missing': val['missing'][:4],
+                'evidence': val['evidence'][:2],
+                'status': val['status'],
+            })
 
-    system_prompt = (
-        'You are a pragmatic B2B sales coach. '
-        'Write crisp, useful output for a seller. '
-        'The email must be written as the seller sending a next-step email directly to the customer. '
-        'Do not write an internal email, manager update, recap note, or message to colleagues. '
-        'Address the customer directly and focus on moving the deal forward. '
-        'The call_script must be customer-facing talk track or questions for the seller to use live with the customer. '
-        'Never use em dashes. '
-        'Avoid generic filler. '
-        'Keep it grounded in the supplied deal context and methodology. '
-        'Return strict JSON with keys subject, body, and call_script. '
-        'call_script must be an array of 4 concise lines.'
+    instructions = (
+        "You are a pragmatic B2B sales seller writing to a prospect.\n"
+        "Return strict JSON with exactly these keys: subject, body, call_script.\n"
+        "subject: a short external subject line.\n"
+        "body: a customer-facing follow-up email from the seller to the customer.\n"
+        "call_script: an array of 4 concise customer-facing talk tracks or questions.\n\n"
+        "Rules:\n"
+        "- Write as the seller emailing the customer directly.\n"
+        "- Never write an internal email.\n"
+        "- Never address 'team'.\n"
+        "- Never mention BANT, MEDDPICC, pipeline, forecast, stage hygiene, internal review, or manager coaching.\n"
+        "- Keep the tone natural, direct, and professional.\n"
+        "- The goal is to get the missing information and move the deal forward.\n"
+        "- Include a clear ask for a short meeting or reply.\n"
+        "- Keep the email under 180 words.\n"
+        "- Keep the subject under 8 words.\n"
+        "- Keep each call_script line under 18 words.\n"
+        "- Do not use em dashes.\n"
+        "- Do not wrap the JSON in markdown fences."
     )
-    user_prompt = {
+
+    prompt_payload = {
         'methodology': methodology_title(methodology),
         'stage': stage_info['stage'],
         'next_step': next_step,
         'summary': unlocked_summary(parts, methodology),
+        'customer_name': customer_name,
         'gaps': gaps,
-        'email_audience': 'customer',
-        'seller_goal': 'send the next external email to the customer that helps collect missing deal information and move the opportunity forward',
-        'deal_text': raw_text[:8000],
+        'deal_text': raw_text[:3500],
     }
+
     payload = {
         'model': OPENAI_MODEL,
-        'input': [
-            {'role': 'system', 'content': [{'type': 'input_text', 'text': system_prompt}]},
-            {'role': 'user', 'content': [{'type': 'input_text', 'text': json.dumps(user_prompt)}]},
-        ],
-        'text': {'format': {'type': 'json_object'}},
+        'instructions': instructions,
+        'input': json.dumps(prompt_payload),
+        'max_output_tokens': 500,
+        'temperature': 0.4,
+        'text': {
+            'format': {
+                'type': 'text'
+            }
+        },
     }
+
     req = urlrequest.Request(
         'https://api.openai.com/v1/responses',
         data=json.dumps(payload).encode('utf-8'),
@@ -753,30 +788,53 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         },
         method='POST'
     )
+
     try:
         with urlrequest.urlopen(req, timeout=OPENAI_TIMEOUT_SECONDS) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        text = None
-        if isinstance(data.get('output_text'), str):
-            text = data['output_text']
-        else:
-            for item in data.get('output', []):
-                for content in item.get('content', []):
-                    if content.get('type') == 'output_text':
-                        text = content.get('text')
-                        break
-                if text:
-                    break
-        parsed = json.loads(text) if text else {}
-        subject = parsed.get('subject') or 'Aligning on next steps'
-        body = parsed.get('body') or fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)[0]['body']
-        call_script = parsed.get('call_script') or fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)[1]
-        if not isinstance(call_script, list):
-            call_script = [str(call_script)]
-        return {'subject': str(subject), 'body': str(body)}, [str(x) for x in call_script[:6]]
-    except Exception:
+            raw = resp.read().decode('utf-8')
+            data = json.loads(raw)
+
+        text_chunks = []
+        for item in data.get('output', []):
+            if item.get('type') != 'message':
+                continue
+            for content in item.get('content', []):
+                if content.get('type') == 'output_text' and content.get('text'):
+                    text_chunks.append(content.get('text'))
+
+        combined_text = '\n'.join(text_chunks).strip()
+        if not combined_text:
+            raise ValueError('No AI text content returned from Responses API')
+
+        parsed = json.loads(combined_text)
+
+        subject = str(parsed.get('subject', '')).strip()
+        body = str(parsed.get('body', '')).strip()
+        call_script = parsed.get('call_script', [])
+
+        if not subject:
+            subject = fallback_email['subject']
+        if not body:
+            body = fallback_email['body']
+        if not isinstance(call_script, list) or not call_script:
+            call_script = fallback_script
+
+        cleaned_script = [str(x).strip() for x in call_script if str(x).strip()]
+        if not cleaned_script:
+            cleaned_script = fallback_script
+
+        if re.search(r'\bhi team\b', body, re.I) or re.search(r'\bforecast\b|\bpipeline\b|\bBANT\b|\bMEDDPICC\b', body, re.I):
+            raise ValueError('AI returned internal-facing email content')
+
+        return {
+            'subject': subject,
+            'body': body,
+        }, cleaned_script[:6]
+
+    except Exception as e:
         app.logger.exception('AI generation failed, using fallback content')
-        return fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
+        app.logger.error('AI failure detail: %s', str(e))
+        return fallback_email, fallback_script
 
 
 @app.after_request

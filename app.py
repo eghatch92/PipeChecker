@@ -910,7 +910,10 @@ def waitlist():
     if not email or '@' not in email or '.' not in email:
         return jsonify({'status': 'invalid', 'error': 'That email did not look valid. Please try again.'}), 400
 
-    unlock_context_id = ((request.form.get('unlock_context_id') if request.form else None) or '').strip()
+    raw_text = ((request.form.get('raw_text') if request.form else None) or '').strip()
+    methodology = ((request.form.get('methodology') if request.form else 'bant') or 'bant').strip().lower()
+    if methodology not in {'bant', 'meddpicc'}:
+        methodology = 'bant'
 
     conn = db()
     try:
@@ -921,15 +924,17 @@ def waitlist():
     finally:
         conn.close()
 
-    context = pop_unlock_context(unlock_context_id)
-    if context:
-        ai_email, call_script = ai_email_and_script(
-            context['raw_text'],
-            context['parts'],
-            context['stage_info'],
-            context['methodology'],
-            context['next_step'],
-        )
+    if raw_text:
+        if len(raw_text) < 40:
+            return jsonify({'status': 'invalid', 'error': 'Add more detail. The pasted context is too short for a useful analysis.'}), 400
+        if len(raw_text) > MAX_INPUT_CHARS:
+            return jsonify({'status': 'invalid', 'error': f'Input is too large. Keep it under about {MAX_INPUT_CHARS:,} characters.'}), 400
+
+        model = model_for(methodology)
+        stage_info = infer_stage(raw_text)
+        parts, _score, _signal_results = analyze_model(raw_text, model)
+        step = choose_next_step(parts, stage_info, methodology)
+        ai_email, call_script = ai_email_and_script(raw_text, parts, stage_info, methodology, step)
         return jsonify({'status': 'ok', 'email': ai_email, 'call_script': call_script})
 
     return jsonify({'status': 'ok'})

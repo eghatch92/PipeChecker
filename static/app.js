@@ -42,7 +42,8 @@ let loadingMessageIndex = 0;
 let latestAnalysis = null;
 let unlocked = false;
 let detailFilter = 'all';
-let latestUnlockContextId = '';
+let latestRawText = '';
+let latestMethodology = 'bant';
 
 function startLoadingStatus() {
   loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
@@ -286,7 +287,8 @@ function bindResultActions(data) {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: [
             'email=' + encodeURIComponent(email),
-            'unlock_context_id=' + encodeURIComponent(latestUnlockContextId)
+            'raw_text=' + encodeURIComponent(latestRawText),
+            'methodology=' + encodeURIComponent(latestMethodology)
           ].join('&')
         });
         const payload = await res.json().catch(() => ({}));
@@ -443,7 +445,8 @@ analyzeBtn.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Analysis failed.');
-    latestUnlockContextId = data.unlock_context_id || '';
+    latestRawText = rawText.value;
+    latestMethodology = methodologySelect.value;
     renderResults(data);
   } catch (err) {
     errorBox.textContent = err.message;
@@ -458,7 +461,8 @@ analyzeBtn.addEventListener('click', async () => {
 clearBtn.addEventListener('click', () => {
   unlocked = false;
   latestAnalysis = null;
-  latestUnlockContextId = '';
+  latestRawText = '';
+  latestMethodology = 'bant';
   detailFilter = 'all';
   rawText.value = '';
   charCount.textContent = '0';

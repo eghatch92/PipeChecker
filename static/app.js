@@ -42,6 +42,7 @@ let loadingMessageIndex = 0;
 let latestAnalysis = null;
 let unlocked = false;
 let detailFilter = 'all';
+let latestUnlockContextId = '';
 
 function startLoadingStatus() {
   loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
@@ -279,23 +280,36 @@ function bindResultActions(data) {
       const msg = document.getElementById('waitlistMessage');
       const email = (emailInput.value || '').trim();
       msg.textContent = 'Unlocking...';
+      startLoadingStatus();
       try {
         const res = await fetch('/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'email=' + encodeURIComponent(email)
+          body: [
+            'email=' + encodeURIComponent(email),
+            'unlock_context_id=' + encodeURIComponent(latestUnlockContextId)
+          ].join('&')
         });
         const payload = await res.json().catch(() => ({}));
         if (res.ok) {
+          if (payload.email && payload.call_script) {
+            latestAnalysis = {
+              ...latestAnalysis,
+              email: payload.email,
+              call_script: payload.call_script
+            };
+          }
           unlocked = true;
           msg.textContent = "You're on the list. Strategy unlocked.";
           msg.classList.add('success-text');
           renderResults(latestAnalysis);
         } else {
-          msg.textContent = payload.error || 'That email did not look valid. Please try again.';
+          msg.textContent = payload.error || 'Could not unlock insights. Please try again.';
         }
       } catch (err) {
         msg.textContent = 'Something went wrong. Please try again.';
+      } finally {
+        stopLoadingStatus();
       }
     });
   }
@@ -432,6 +446,7 @@ analyzeBtn.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Analysis failed.');
+    latestUnlockContextId = data.unlock_context_id || '';
     renderResults(data);
   } catch (err) {
     errorBox.textContent = err.message;
@@ -446,6 +461,7 @@ analyzeBtn.addEventListener('click', async () => {
 clearBtn.addEventListener('click', () => {
   unlocked = false;
   latestAnalysis = null;
+  latestUnlockContextId = '';
   detailFilter = 'all';
   rawText.value = '';
   charCount.textContent = '0';

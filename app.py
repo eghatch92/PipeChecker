@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import time
+import uuid
 from collections import defaultdict, deque
 from threading import Lock
 from urllib import request as urlrequest
@@ -31,6 +32,9 @@ RATE_STATE = defaultdict(deque)
 RATE_LOCK = Lock()
 AI_CALLS = deque()
 AI_LOCK = Lock()
+UNLOCK_CONTEXTS = {}
+UNLOCK_CONTEXT_LOCK = Lock()
+UNLOCK_CONTEXT_TTL_SECONDS = int(os.environ.get('UNLOCK_CONTEXT_TTL_SECONDS', '3600'))
 
 STAGE_PATTERNS = [
     (r'closed\s*won|contract\s*signed|signature|signed order form', 'Closed Won', 6),
@@ -279,6 +283,37 @@ def rate_limit_check(bucket_key: str, limit: int, window_seconds: int):
             return False, retry_after
         bucket.append(now)
     return True, None
+
+
+def create_unlock_context(raw_text, methodology, parts, stage_info, next_step):
+    now = time.time()
+    context_id = uuid.uuid4().hex
+    with UNLOCK_CONTEXT_LOCK:
+        expired = [key for key, data in UNLOCK_CONTEXTS.items() if now - data['created_at'] > UNLOCK_CONTEXT_TTL_SECONDS]
+        for key in expired:
+            del UNLOCK_CONTEXTS[key]
+        UNLOCK_CONTEXTS[context_id] = {
+            'created_at': now,
+            'raw_text': raw_text,
+            'methodology': methodology,
+            'parts': parts,
+            'stage_info': stage_info,
+            'next_step': next_step,
+        }
+    return context_id
+
+
+def pop_unlock_context(context_id):
+    if not context_id:
+        return None
+    now = time.time()
+    with UNLOCK_CONTEXT_LOCK:
+        context = UNLOCK_CONTEXTS.pop(context_id, None)
+    if not context:
+        return None
+    if now - context['created_at'] > UNLOCK_CONTEXT_TTL_SECONDS:
+        return None
+    return context
 
 
 
@@ -984,6 +1019,7 @@ def analyze():
         'gif': gif,
         'ai_enabled': bool(OPENAI_API_KEY),
         'summary_text': unlocked_summary(parts, methodology),
+        'unlock_context_id': create_unlock_context(raw_text, methodology, parts, stage_info, step),
     }
     return jsonify(result)
 

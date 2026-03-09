@@ -6,7 +6,6 @@ import os
 import re
 import sqlite3
 import time
-import uuid
 from collections import defaultdict, deque
 from threading import Lock
 from urllib import request as urlrequest
@@ -32,9 +31,6 @@ RATE_STATE = defaultdict(deque)
 RATE_LOCK = Lock()
 AI_CALLS = deque()
 AI_LOCK = Lock()
-UNLOCK_CONTEXTS = {}
-UNLOCK_CONTEXT_LOCK = Lock()
-UNLOCK_CONTEXT_TTL_SECONDS = int(os.environ.get('UNLOCK_CONTEXT_TTL_SECONDS', '3600'))
 
 STAGE_PATTERNS = [
     (r'closed\s*won|contract\s*signed|signature|signed order form', 'Closed Won', 6),
@@ -283,37 +279,6 @@ def rate_limit_check(bucket_key: str, limit: int, window_seconds: int):
             return False, retry_after
         bucket.append(now)
     return True, None
-
-
-def create_unlock_context(raw_text, methodology, parts, stage_info, next_step):
-    now = time.time()
-    context_id = uuid.uuid4().hex
-    with UNLOCK_CONTEXT_LOCK:
-        expired = [key for key, data in UNLOCK_CONTEXTS.items() if now - data['created_at'] > UNLOCK_CONTEXT_TTL_SECONDS]
-        for key in expired:
-            del UNLOCK_CONTEXTS[key]
-        UNLOCK_CONTEXTS[context_id] = {
-            'created_at': now,
-            'raw_text': raw_text,
-            'methodology': methodology,
-            'parts': parts,
-            'stage_info': stage_info,
-            'next_step': next_step,
-        }
-    return context_id
-
-
-def pop_unlock_context(context_id):
-    if not context_id:
-        return None
-    now = time.time()
-    with UNLOCK_CONTEXT_LOCK:
-        context = UNLOCK_CONTEXTS.pop(context_id, None)
-    if not context:
-        return None
-    if now - context['created_at'] > UNLOCK_CONTEXT_TTL_SECONDS:
-        return None
-    return context
 
 
 
@@ -734,8 +699,6 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "Do not address 'team'.\n"
         "Do not mention BANT, MEDDPICC, pipeline, forecast, internal review, or manager coaching.\n"
         "Write as the seller sending the next external email directly to the customer.\n"
-        "Return a send-ready customer email, not writing instructions or coaching steps.\n"
-        "Do not include section labels, 'Step 1/2/3', or commentary about what to write.\n"
         "Keep the email under 170 words.\n"
         "Keep the subject under 8 words.\n"
         "Keep each call-script line under 16 words.\n"
@@ -745,7 +708,6 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "Section 3: ask exactly one open-ended question.\n"
         "Do not ask multiple questions.\n"
         "Do not include bullet points in the email.\n"
-        "Use natural email paragraphs only, as if this will be sent immediately.\n"
         "The call script must contain only live talk-track questions or prompts.\n"
         "The call script must not include SUBJECT or EMAIL labels.\n"
         "Use exactly this format:\n"
@@ -819,9 +781,6 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
 
         subject = subject_match.group(1).strip() if subject_match else fallback_email['subject']
         body = email_match.group(1).strip() if email_match else fallback_email['body']
-        body = re.sub(r'^\s*(?:section|step)\s*\d+\s*[:\-]\s*', '', body, flags=re.I | re.M)
-        body = re.sub(r'^\s*section\s*[123]\s*[:\-]\s*', '', body, flags=re.I | re.M)
-        body = re.sub(r'\n{3,}', '\n\n', body).strip()
 
         call_script = []
         if script_match:
@@ -909,12 +868,6 @@ def waitlist():
     email = ((request.form.get('email') if request.form else None) or '').strip().lower()
     if not email or '@' not in email or '.' not in email:
         return jsonify({'status': 'invalid', 'error': 'That email did not look valid. Please try again.'}), 400
-
-    raw_text = ((request.form.get('raw_text') if request.form else None) or '').strip()
-    methodology = ((request.form.get('methodology') if request.form else 'bant') or 'bant').strip().lower()
-    if methodology not in {'bant', 'meddpicc'}:
-        methodology = 'bant'
-
     conn = db()
     try:
         conn.execute('INSERT INTO waitlist (email) VALUES (?)', (email,))
@@ -923,20 +876,6 @@ def waitlist():
         pass
     finally:
         conn.close()
-
-    if raw_text:
-        if len(raw_text) < 40:
-            return jsonify({'status': 'invalid', 'error': 'Add more detail. The pasted context is too short for a useful analysis.'}), 400
-        if len(raw_text) > MAX_INPUT_CHARS:
-            return jsonify({'status': 'invalid', 'error': f'Input is too large. Keep it under about {MAX_INPUT_CHARS:,} characters.'}), 400
-
-        model = model_for(methodology)
-        stage_info = infer_stage(raw_text)
-        parts, _score, _signal_results = analyze_model(raw_text, model)
-        step = choose_next_step(parts, stage_info, methodology)
-        ai_email, call_script = ai_email_and_script(raw_text, parts, stage_info, methodology, step)
-        return jsonify({'status': 'ok', 'email': ai_email, 'call_script': call_script})
-
     return jsonify({'status': 'ok'})
 
 
@@ -1004,6 +943,8 @@ def analyze():
     step = choose_next_step(parts, stage_info, methodology)
     deal_count, average_score = increment_stats(score, methodology)
     gif = pick_gif(score)
+    email, call_script = ai_email_and_script(raw_text, parts, stage_info, methodology, step)
+
     result = {
         'methodology': methodology,
         'methodology_label': methodology_title(methodology),
@@ -1015,11 +956,12 @@ def analyze():
         'analysis': parts,
         'red_flags': red_flags(parts, stage_info, methodology),
         'next_step': step,
+        'email': email,
+        'call_script': call_script,
         'deal_count': deal_count,
         'gif': gif,
         'ai_enabled': bool(OPENAI_API_KEY),
         'summary_text': unlocked_summary(parts, methodology),
-        'unlock_context_id': create_unlock_context(raw_text, methodology, parts, stage_info, step),
     }
     return jsonify(result)
 

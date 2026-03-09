@@ -163,7 +163,7 @@ function renderLockedSection(data) {
       <p class="helper">Drop your email to unlock the customer-facing email, call script, and action plan for this ${escapeHtml(data.methodology_label)} readout.</p>
       <form id="waitlistForm" class="waitlist-inline">
         <input type="email" id="waitlistEmail" placeholder="Enter your work email" required>
-        <button type="submit">Unlock insight</button>
+        <button type="submit">Get email + call script</button>
       </form>
       <div class="unlock-note">No spam. Early access only.</div>
       <div id="waitlistMessage" class="helper"></div>
@@ -280,7 +280,7 @@ function bindResultActions(data) {
       const emailInput = document.getElementById('waitlistEmail');
       const msg = document.getElementById('waitlistMessage');
       const email = (emailInput.value || '').trim();
-      msg.textContent = 'Unlocking...';
+      msg.textContent = 'Generating email and call script...';
       startLoadingStatus();
       try {
         const res = await fetch('/waitlist', {
@@ -446,7 +446,10 @@ analyzeBtn.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ raw_text: rawText.value, methodology: methodologySelect.value })
     });
-    const data = await res.json();
+    const contentType = res.headers.get('content-type') || '';
+    const data = contentType.includes('application/json')
+      ? await res.json()
+      : { error: 'Server returned a non-JSON response. Please try again.' };
     if (!res.ok) throw new Error(data.error || 'Analysis failed.');
     latestRawText = rawText.value;
     latestMethodology = methodologySelect.value;

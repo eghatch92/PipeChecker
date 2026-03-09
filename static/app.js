@@ -42,6 +42,8 @@ let loadingMessageIndex = 0;
 let latestAnalysis = null;
 let unlocked = false;
 let detailFilter = 'all';
+let latestRawText = '';
+let latestMethodology = 'bant';
 
 function startLoadingStatus() {
   loadingMessageIndex = Math.floor(Math.random() * loadingMessages.length);
@@ -283,10 +285,21 @@ function bindResultActions(data) {
         const res = await fetch('/waitlist', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'email=' + encodeURIComponent(email)
+          body: [
+            'email=' + encodeURIComponent(email),
+            'raw_text=' + encodeURIComponent(latestRawText),
+            'methodology=' + encodeURIComponent(latestMethodology)
+          ].join('&')
         });
         const payload = await res.json().catch(() => ({}));
         if (res.ok) {
+          if (payload.email && payload.call_script) {
+            latestAnalysis = {
+              ...latestAnalysis,
+              email: payload.email,
+              call_script: payload.call_script
+            };
+          }
           unlocked = true;
           msg.textContent = "You're on the list. Strategy unlocked.";
           msg.classList.add('success-text');
@@ -432,6 +445,8 @@ analyzeBtn.addEventListener('click', async () => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Analysis failed.');
+    latestRawText = rawText.value;
+    latestMethodology = methodologySelect.value;
     renderResults(data);
   } catch (err) {
     errorBox.textContent = err.message;
@@ -446,6 +461,8 @@ analyzeBtn.addEventListener('click', async () => {
 clearBtn.addEventListener('click', () => {
   unlocked = false;
   latestAnalysis = null;
+  latestRawText = '';
+  latestMethodology = 'bant';
   detailFilter = 'all';
   rawText.value = '';
   charCount.textContent = '0';

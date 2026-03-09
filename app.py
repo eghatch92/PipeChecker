@@ -642,7 +642,7 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
         f'One thing that usually helps at this stage is clarifying {primary.lower()} before leadership review, '
         'so the next conversation stays focused and productive.'
     )
-    question = missing[0] if missing else 'How do you want to handle the next step from here?'
+    question = 'Last time you implemented something like this, what did the approval workflow look like on your side?'
 
     email = (
         f'{greeting}\n\n'
@@ -705,7 +705,7 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "The email must have exactly 3 short sections.\n"
         "Section 1: answer a previous question they had, send something they asked for, or provide useful value.\n"
         "Section 2: briefly educate them on one important point related to the decision.\n"
-        "Section 3: ask exactly one open-ended question.\n"
+        "Section 3: ask exactly one open-ended question about how decisions like this normally get approved or handled internally. Example: 'Last time you implemented something like this, what did the approval workflow look like?'.\n"
         "Do not ask multiple questions.\n"
         "Do not include bullet points in the email.\n"
         "The call script must contain only live talk-track questions or prompts.\n"
@@ -800,7 +800,18 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         if re.search(r'\bhi team\b', body, re.I) or re.search(r'\bforecast\b|\bpipeline\b|\bBANT\b|\bMEDDPICC\b', body, re.I):
             raise ValueError('AI returned internal-facing email content')
 
+        
+        # Safety: ensure final question sounds external
+        if re.search(r'how spend like this gets approved|do they understand', body, re.I):
+            body = re.sub(
+                r'how spend like this gets approved\??',
+                'Last time you implemented something like this, what did the approval workflow look like?',
+                body,
+                flags=re.I
+            )
+
         return {'subject': subject, 'body': body}, call_script[:6]
+
 
     except HTTPError as e:
         detail = ''

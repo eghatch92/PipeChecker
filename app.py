@@ -714,7 +714,7 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "model": OPENAI_MODEL,
         "instructions": instructions,
         "input": input_text,
-        "max_output_tokens": 400
+        "max_output_tokens": 2000
     }
 
     req = urlrequest.Request(

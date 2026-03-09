@@ -9,7 +9,7 @@ import time
 from collections import defaultdict, deque
 from threading import Lock
 from urllib import request as urlrequest
-import math
+from urllib.error import HTTPError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, 'pipe_checker.db')
@@ -17,7 +17,7 @@ DB_PATH = os.environ.get('DB_PATH', DEFAULT_DB_PATH)
 ADMIN_EXPORT_KEY = os.environ.get('ADMIN_EXPORT_KEY', 'change-this-now')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-5-mini')
-OPENAI_TIMEOUT_SECONDS = int(os.environ.get('OPENAI_TIMEOUT_SECONDS', '60'))
+OPENAI_TIMEOUT_SECONDS = int(os.environ.get('OPENAI_TIMEOUT_SECONDS', '45'))
 AI_MAX_PER_HOUR = int(os.environ.get('AI_MAX_PER_HOUR', '50'))
 AI_LIMIT_MESSAGE = os.environ.get('AI_LIMIT_MESSAGE', 'AI coaching temporarily exhausted for this hour. Try again soon.')
 MAX_INPUT_CHARS = int(os.environ.get('MAX_INPUT_CHARS', '50000'))
@@ -281,6 +281,8 @@ def rate_limit_check(bucket_key: str, limit: int, window_seconds: int):
     return True, None
 
 
+
+
 def ai_limit_check():
     now = time.time()
     if AI_MAX_PER_HOUR <= 0:
@@ -354,7 +356,6 @@ def init_db():
     conn = db()
     conn.execute('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS waitlist (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
-    conn.execute('CREATE TABLE IF NOT EXISTS analyses (id INTEGER PRIMARY KEY AUTOINCREMENT, methodology TEXT NOT NULL, score INTEGER NOT NULL, stage TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     for key in ['deal_count', 'total_score', 'deal_count_bant', 'total_score_bant', 'deal_count_meddpicc', 'total_score_meddpicc']:
         ensure_stat(conn, key, 0)
     conn.commit()
@@ -379,13 +380,12 @@ def get_average_score(methodology=None):
     return round(total / count) if count else 0
 
 
-def increment_stats(score, methodology, stage):
+def increment_stats(score, methodology):
     conn = db()
     conn.execute("UPDATE stats SET value = value + 1 WHERE key='deal_count'")
     conn.execute("UPDATE stats SET value = value + ? WHERE key='total_score'", (int(score),))
     conn.execute("UPDATE stats SET value = value + 1 WHERE key=?", (f'deal_count_{methodology}',))
     conn.execute("UPDATE stats SET value = value + ? WHERE key=?", (int(score), f'total_score_{methodology}'))
-    conn.execute('INSERT INTO analyses (methodology, score, stage) VALUES (?, ?, ?)', (methodology, int(score), stage))
     conn.commit()
     deal_count = conn.execute("SELECT value FROM stats WHERE key='deal_count'").fetchone()['value']
     method_count = conn.execute("SELECT value FROM stats WHERE key=?", (f'deal_count_{methodology}',)).fetchone()['value']
@@ -393,51 +393,6 @@ def increment_stats(score, methodology, stage):
     conn.close()
     average = round(method_total / method_count) if method_count else 0
     return int(deal_count), int(average)
-
-
-def get_methodology_usage():
-    bant = stat_value('deal_count_bant', 0)
-    meddpicc = stat_value('deal_count_meddpicc', 0)
-    total = bant + meddpicc
-    if total == 0:
-        return {
-            'bant_count': 0, 'meddpicc_count': 0, 'bant_pct': 0, 'meddpicc_pct': 0
-        }
-    return {
-        'bant_count': bant,
-        'meddpicc_count': meddpicc,
-        'bant_pct': round((bant / total) * 100),
-        'meddpicc_pct': round((meddpicc / total) * 100),
-    }
-
-
-def get_top20_threshold(methodology):
-    conn = db()
-    rows = conn.execute('SELECT score FROM analyses WHERE methodology=? ORDER BY score DESC', (methodology,)).fetchall()
-    conn.close()
-    scores = [int(r['score']) for r in rows]
-    if not scores:
-        return 0
-    idx = max(0, math.ceil(len(scores) * 0.2) - 1)
-    return scores[idx]
-
-
-def get_leaderboard_today(limit=5):
-    conn = db()
-    rows = conn.execute(
-        "SELECT methodology, score, stage, created_at FROM analyses WHERE date(created_at)=date('now') ORDER BY score DESC, created_at ASC LIMIT ?",
-        (limit,)
-    ).fetchall()
-    conn.close()
-    out = []
-    for i, row in enumerate(rows, start=1):
-        out.append({
-            'rank': i,
-            'score': int(row['score']),
-            'label': f"{methodology_title(row['methodology'])} • {row['stage']}",
-            'created_at': row['created_at'],
-        })
-    return out
 
 
 def infer_stage(text):
@@ -463,6 +418,7 @@ def signal_strength(text, signal):
         evidence = partial_hits
         points = max(1, round(signal['weight'] * 0.45))
 
+    # MEDDPICC metric hard-number guardrails
     if signal['name'] == 'Hard number present' and not has_hard_number(text):
         status, points, evidence = 'Missing', 0, []
     if signal['name'] == 'Metric is specific, not generic':
@@ -654,62 +610,51 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
     weak = [name for name, val in parts.items() if val['status'] != 'Complete']
     primary = weak[0] if weak else ('Budget' if methodology == 'bant' else 'Metrics')
     missing = parts[primary]['missing'][:3]
-
-    name_match = re.search(r'\b(?:met with|spoke with|talked to|meeting with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', raw_text)
-    customer_name = name_match.group(1).split()[0] if name_match else None
-    greeting = f'Hi {customer_name},' if customer_name else 'Hi there,'
-
-    subject_map = {
+    subject = {
         'bant': {
-            'Understand Budget': 'Quick question on approval and budget',
+            'Understand Budget': 'Quick alignment on budget process',
             'Map Buying Committee': 'Quick alignment on who should be involved',
-            'Quantify Need': 'Confirming the business outcome you want to drive',
-            'Lock Timeline': 'Working backward from your target timing',
-            'Advance to Mutual Action Plan': 'Proposed next steps',
+            'Quantify Need': 'Confirming the business impact and target outcome',
+            'Lock Timeline': 'Working backward from your target close date',
+            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
         },
         'meddpicc': {
-            'Tighten Metrics': 'Confirming the exact outcome you want to drive',
-            'Map Economic Buyer': 'Quick alignment on decision ownership',
-            'Clarify Decision Criteria': 'Clarifying the requirements that matter most',
+            'Tighten Metrics': 'Confirming the exact numbers behind this initiative',
+            'Map Economic Buyer': 'Clarifying economic buyer and priorities',
+            'Clarify Decision Criteria': 'Confirming the technical boxes that matter most',
             'Map Decision Process': 'Aligning on decision path and timing',
             'Map Paper Process': 'Clarifying contract and approval steps',
-            'Deepen Pain': 'Confirming the current challenge and desired outcome',
-            'Test Champion': 'Making sure we have the right people involved',
-            'Pressure-Test Competition': 'Pressure-testing alternatives and priorities',
-            'Advance to Mutual Action Plan': 'Proposed next steps',
+            'Deepen Pain': 'Confirming the current state and desired outcome',
+            'Test Champion': 'Making sure we have the right internal support',
+            'Pressure-Test Competition': 'Pressure-testing alternatives and competing priorities',
+            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
         }
     }
-
-    subj = subject_map[methodology].get(next_step, 'Aligning on next steps')
-    bullet_block = '\n'.join([f'- {item}' for item in missing]) if missing else '- Confirm the remaining decision details'
-
-    body = (
-        f'{greeting}\n\n'
-        'I want to make sure we have the right people and information in place before we move this forward.\n\n'
-        'From what we have discussed so far, it would help to clarify:\n'
-        f'{bullet_block}\n\n'
-        'Would you be open to a short call next week so we can map this out together and keep momentum going?\n\n'
-        'Best,\n'
-        '[Your Name]'
+    subj = subject[methodology].get(next_step, 'Aligning on next steps')
+    ask_lines = '\n'.join([f'- {item}' for item in missing]) if missing else '- Confirm the remaining decision gaps'
+    email = (
+        'Hi team,\n\n'
+        f'To keep this moving, I want to make sure we close the remaining {methodology_title(methodology)} gaps before the next forecast conversation. '
+        f'Right now the biggest area to tighten is {primary}.\n\n'
+        'The fastest way to do that would be to confirm:\n'
+        f'{ask_lines}\n\n'
+        f'If helpful, I can keep the next conversation tight and focused so we can get this into a cleaner stage than {stage_info["stage"]}.\n\n'
+        'Best,'
     )
-
     script = [
-        'Before we move this forward, I want to make sure we have the right people involved.',
+        f'Before we move this past {stage_info["stage"]}, I want to pressure-test {primary}.',
     ] + missing[:3]
-
     if not missing:
         script += [
             'What could still get in the way between now and signature?',
             'Who else should we involve now so the process stays smooth?'
         ]
+    return {'subject': subj, 'body': email}, script
 
-    return {'subject': subj, 'body': body}, script
 
 
 def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
-    fallback_email, fallback_script = fallback_email_and_script(
-        raw_text, parts, stage_info, methodology, next_step
-    )
+    fallback_email, fallback_script = fallback_email_and_script(raw_text, parts, stage_info, methodology, next_step)
 
     if not OPENAI_API_KEY:
         return fallback_email, fallback_script
@@ -721,7 +666,6 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
 
     gaps = []
     customer_name = None
-
     name_match = re.search(r'\b(?:met with|spoke with|talked to|meeting with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', raw_text)
     if name_match:
         customer_name = name_match.group(1).strip()
@@ -730,53 +674,47 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         if val['status'] != 'Complete':
             gaps.append({
                 'category': category,
-                'missing': val['missing'][:4],
-                'evidence': val['evidence'][:2],
+                'missing': val['missing'][:3],
                 'status': val['status'],
             })
 
     instructions = (
         "You are a pragmatic B2B sales seller writing to a prospect.\n"
-        "Return strict JSON with exactly these keys: subject, body, call_script.\n"
-        "subject: a short external subject line.\n"
-        "body: a customer-facing follow-up email from the seller to the customer.\n"
-        "call_script: an array of 4 concise customer-facing talk tracks or questions.\n\n"
-        "Rules:\n"
-        "- Write as the seller emailing the customer directly.\n"
-        "- Never write an internal email.\n"
-        "- Never address 'team'.\n"
-        "- Never mention BANT, MEDDPICC, pipeline, forecast, stage hygiene, internal review, or manager coaching.\n"
-        "- Keep the tone natural, direct, and professional.\n"
-        "- The goal is to get the missing information and move the deal forward.\n"
-        "- Include a clear ask for a short meeting or reply.\n"
-        "- Keep the email under 180 words.\n"
-        "- Keep the subject under 8 words.\n"
-        "- Keep each call_script line under 18 words.\n"
-        "- Do not use em dashes.\n"
-        "- Do not wrap the JSON in markdown fences."
+        "Write only in plain text.\n"
+        "Do not write JSON.\n"
+        "Do not use markdown fences.\n"
+        "Do not address 'team'.\n"
+        "Do not mention BANT, MEDDPICC, pipeline, forecast, internal review, or manager coaching.\n"
+        "Write as the seller sending the next external email directly to the customer.\n"
+        "Keep the email under 160 words.\n"
+        "Keep the subject under 8 words.\n"
+        "Keep each call-script line under 16 words.\n"
+        "Use exactly this format:\n"
+        "SUBJECT: <subject line>\n"
+        "EMAIL:\n"
+        "<email body>\n"
+        "CALL_SCRIPT:\n"
+        "- <line 1>\n"
+        "- <line 2>\n"
+        "- <line 3>\n"
+        "- <line 4>"
     )
 
-    prompt_payload = {
-        'methodology': methodology_title(methodology),
-        'stage': stage_info['stage'],
-        'next_step': next_step,
-        'summary': unlocked_summary(parts, methodology),
-        'customer_name': customer_name,
-        'gaps': gaps,
-        'deal_text': raw_text[:3500],
-    }
+    input_text = (
+        f"Methodology: {methodology_title(methodology)}\n"
+        f"Stage: {stage_info['stage']}\n"
+        f"Recommended next step: {next_step}\n"
+        f"Customer name: {customer_name or 'Unknown'}\n"
+        f"Summary: {unlocked_summary(parts, methodology)}\n"
+        f"Gaps: {json.dumps(gaps)}\n\n"
+        f"Deal context:\n{raw_text[:3000]}"
+    )
 
     payload = {
-        'model': OPENAI_MODEL,
-        'instructions': instructions,
-        'input': json.dumps(prompt_payload),
-        'max_output_tokens': 500,
-        'temperature': 0.4,
-        'text': {
-            'format': {
-                'type': 'text'
-            }
-        },
+        "model": OPENAI_MODEL,
+        "instructions": instructions,
+        "input": input_text,
+        "max_output_tokens": 400
     }
 
     req = urlrequest.Request(
@@ -806,31 +744,37 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         if not combined_text:
             raise ValueError('No AI text content returned from Responses API')
 
-        parsed = json.loads(combined_text)
+        subject_match = re.search(r'SUBJECT:\s*(.+)', combined_text)
+        email_match = re.search(r'EMAIL:\s*(.*?)(?:CALL_SCRIPT:|$)', combined_text, re.S)
+        script_match = re.search(r'CALL_SCRIPT:\s*(.*)$', combined_text, re.S)
 
-        subject = str(parsed.get('subject', '')).strip()
-        body = str(parsed.get('body', '')).strip()
-        call_script = parsed.get('call_script', [])
+        subject = subject_match.group(1).strip() if subject_match else fallback_email['subject']
+        body = email_match.group(1).strip() if email_match else fallback_email['body']
 
-        if not subject:
-            subject = fallback_email['subject']
-        if not body:
-            body = fallback_email['body']
-        if not isinstance(call_script, list) or not call_script:
+        call_script = []
+        if script_match:
+            for line in script_match.group(1).splitlines():
+                cleaned = re.sub(r'^\s*[-•]\s*', '', line).strip()
+                if cleaned:
+                    call_script.append(cleaned)
+
+        if not call_script:
             call_script = fallback_script
-
-        cleaned_script = [str(x).strip() for x in call_script if str(x).strip()]
-        if not cleaned_script:
-            cleaned_script = fallback_script
 
         if re.search(r'\bhi team\b', body, re.I) or re.search(r'\bforecast\b|\bpipeline\b|\bBANT\b|\bMEDDPICC\b', body, re.I):
             raise ValueError('AI returned internal-facing email content')
 
-        return {
-            'subject': subject,
-            'body': body,
-        }, cleaned_script[:6]
+        return {'subject': subject, 'body': body}, call_script[:6]
 
+    except HTTPError as e:
+        detail = ''
+        try:
+            detail = e.read().decode('utf-8')
+        except Exception:
+            detail = str(e)
+        app.logger.exception('AI generation failed, using fallback content')
+        app.logger.error('AI failure detail: %s', detail)
+        return fallback_email, fallback_script
     except Exception as e:
         app.logger.exception('AI generation failed, using fallback content')
         app.logger.error('AI failure detail: %s', str(e))
@@ -961,13 +905,9 @@ def analyze():
     stage_info = infer_stage(raw_text)
     parts, score, _signal_results = analyze_model(raw_text, model)
     step = choose_next_step(parts, stage_info, methodology)
-    deal_count, average_score = increment_stats(score, methodology, stage_info['stage'])
+    deal_count, average_score = increment_stats(score, methodology)
     gif = pick_gif(score)
     email, call_script = ai_email_and_script(raw_text, parts, stage_info, methodology, step)
-
-    usage = get_methodology_usage()
-    top20_threshold = get_top20_threshold(methodology)
-    leaderboard_today = get_leaderboard_today()
 
     result = {
         'methodology': methodology,
@@ -983,9 +923,6 @@ def analyze():
         'email': email,
         'call_script': call_script,
         'deal_count': deal_count,
-        'top20_threshold': top20_threshold,
-        'methodology_usage': usage,
-        'leaderboard_today': leaderboard_today,
         'gif': gif,
         'ai_enabled': bool(OPENAI_API_KEY),
         'summary_text': unlocked_summary(parts, methodology),

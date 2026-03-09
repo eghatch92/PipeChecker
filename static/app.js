@@ -281,6 +281,7 @@ function bindResultActions(data) {
       const msg = document.getElementById('waitlistMessage');
       const email = (emailInput.value || '').trim();
       msg.textContent = 'Unlocking...';
+      startLoadingStatus();
       try {
         const res = await fetch('/waitlist', {
           method: 'POST',
@@ -305,10 +306,12 @@ function bindResultActions(data) {
           msg.classList.add('success-text');
           renderResults(latestAnalysis);
         } else {
-          msg.textContent = payload.error || 'That email did not look valid. Please try again.';
+          msg.textContent = payload.error || 'Could not unlock insights. Please try again.';
         }
       } catch (err) {
         msg.textContent = 'Something went wrong. Please try again.';
+      } finally {
+        stopLoadingStatus();
       }
     });
   }

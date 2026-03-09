@@ -733,15 +733,24 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
             data = json.loads(raw)
 
         text_chunks = []
+
+        # primary path
         for item in data.get('output', []):
-            if item.get('type') != 'message':
-                continue
             for content in item.get('content', []):
-                if content.get('type') == 'output_text' and content.get('text'):
-                    text_chunks.append(content.get('text'))
+                if isinstance(content, dict):
+                    if content.get('type') == 'output_text' and content.get('text'):
+                        text_chunks.append(content.get('text'))
+                    if content.get('text') and isinstance(content.get('text'), str):
+                        text_chunks.append(content.get('text'))
+
+        # fallback path if API shape changed
+        if not text_chunks and isinstance(data.get('output_text'), str):
+            text_chunks.append(data.get('output_text'))
 
         combined_text = '\n'.join(text_chunks).strip()
+
         if not combined_text:
+            app.logger.error('Raw OpenAI response: %s', json.dumps(data)[:3000])
             raise ValueError('No AI text content returned from Responses API')
 
         subject_match = re.search(r'SUBJECT:\s*(.+)', combined_text)

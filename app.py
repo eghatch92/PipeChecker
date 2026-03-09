@@ -610,46 +610,59 @@ def fallback_email_and_script(raw_text, parts, stage_info, methodology, next_ste
     weak = [name for name, val in parts.items() if val['status'] != 'Complete']
     primary = weak[0] if weak else ('Budget' if methodology == 'bant' else 'Metrics')
     missing = parts[primary]['missing'][:3]
+
+    name_match = re.search(r'\b(?:met with|spoke with|talked to|meeting with)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', raw_text)
+    customer_name = name_match.group(1).split()[0] if name_match else None
+    greeting = f'Hi {customer_name},' if customer_name else 'Hi there,'
+
     subject = {
         'bant': {
-            'Understand Budget': 'Quick alignment on budget process',
-            'Map Buying Committee': 'Quick alignment on who should be involved',
-            'Quantify Need': 'Confirming the business impact and target outcome',
-            'Lock Timeline': 'Working backward from your target close date',
-            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
+            'Understand Budget': 'Quick alignment on approval',
+            'Map Buying Committee': 'Next steps for alignment',
+            'Quantify Need': 'Aligning on the opportunity',
+            'Lock Timeline': 'Timing and next steps',
+            'Advance to Mutual Action Plan': 'Proposed next steps',
         },
         'meddpicc': {
-            'Tighten Metrics': 'Confirming the exact numbers behind this initiative',
-            'Map Economic Buyer': 'Clarifying economic buyer and priorities',
-            'Clarify Decision Criteria': 'Confirming the technical boxes that matter most',
-            'Map Decision Process': 'Aligning on decision path and timing',
-            'Map Paper Process': 'Clarifying contract and approval steps',
-            'Deepen Pain': 'Confirming the current state and desired outcome',
-            'Test Champion': 'Making sure we have the right internal support',
-            'Pressure-Test Competition': 'Pressure-testing alternatives and competing priorities',
-            'Advance to Mutual Action Plan': 'Proposed next steps to keep momentum',
+            'Tighten Metrics': 'Confirming the outcome',
+            'Map Economic Buyer': 'Aligning on decision ownership',
+            'Clarify Decision Criteria': 'Clarifying requirements',
+            'Map Decision Process': 'Decision path and timing',
+            'Map Paper Process': 'Approval and contract steps',
+            'Deepen Pain': 'Current challenge and outcome',
+            'Test Champion': 'Making sure we involve the right people',
+            'Pressure-Test Competition': 'Pressure-testing priorities',
+            'Advance to Mutual Action Plan': 'Proposed next steps',
         }
     }
     subj = subject[methodology].get(next_step, 'Aligning on next steps')
-    ask_lines = '\n'.join([f'- {item}' for item in missing]) if missing else '- Confirm the remaining decision gaps'
-    email = (
-        'Hi team,\n\n'
-        f'To keep this moving, I want to make sure we close the remaining {methodology_title(methodology)} gaps before the next forecast conversation. '
-        f'Right now the biggest area to tighten is {primary}.\n\n'
-        'The fastest way to do that would be to confirm:\n'
-        f'{ask_lines}\n\n'
-        f'If helpful, I can keep the next conversation tight and focused so we can get this into a cleaner stage than {stage_info["stage"]}.\n\n'
-        'Best,'
+
+    value_line = 'I will send over the pricing and contract details we discussed so you have everything in one place.'
+    educate_line = (
+        f'One thing that usually helps at this stage is clarifying {primary.lower()} before leadership review, '
+        'so the next conversation stays focused and productive.'
     )
+    question = missing[0] if missing else 'How do you want to handle the next step from here?'
+
+    email = (
+        f'{greeting}\n\n'
+        f'{value_line}\n\n'
+        f'{educate_line}\n\n'
+        f'{question}\n\n'
+        'Best,\n'
+        '[Your Name]'
+    )
+
     script = [
-        f'Before we move this past {stage_info["stage"]}, I want to pressure-test {primary}.',
-    ] + missing[:3]
+        f'What is the best way to think about {primary.lower()} on your side?',
+        *missing[:3]
+    ]
     if not missing:
         script += [
-            'What could still get in the way between now and signature?',
-            'Who else should we involve now so the process stays smooth?'
+            'What could still slow this down?',
+            'Who else should be involved next?'
         ]
-    return {'subject': subj, 'body': email}, script
+    return {'subject': subj, 'body': email}, script[:4]
 
 
 
@@ -686,9 +699,17 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "Do not address 'team'.\n"
         "Do not mention BANT, MEDDPICC, pipeline, forecast, internal review, or manager coaching.\n"
         "Write as the seller sending the next external email directly to the customer.\n"
-        "Keep the email under 160 words.\n"
+        "Keep the email under 170 words.\n"
         "Keep the subject under 8 words.\n"
         "Keep each call-script line under 16 words.\n"
+        "The email must have exactly 3 short sections.\n"
+        "Section 1: answer a previous question they had, send something they asked for, or provide useful value.\n"
+        "Section 2: briefly educate them on one important point related to the decision.\n"
+        "Section 3: ask exactly one open-ended question.\n"
+        "Do not ask multiple questions.\n"
+        "Do not include bullet points in the email.\n"
+        "The call script must contain only live talk-track questions or prompts.\n"
+        "The call script must not include SUBJECT or EMAIL labels.\n"
         "Use exactly this format:\n"
         "SUBJECT: <subject line>\n"
         "EMAIL:\n"
@@ -714,7 +735,7 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         "model": OPENAI_MODEL,
         "instructions": instructions,
         "input": input_text,
-        "max_output_tokens": 2000
+        "max_output_tokens": 1200
     }
 
     req = urlrequest.Request(
@@ -753,6 +774,7 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
             app.logger.error('Raw OpenAI response: %s', json.dumps(data)[:3000])
             raise ValueError('No AI text content returned from Responses API')
 
+        combined_text = combined_text.replace('\r\n', '\n')
         subject_match = re.search(r'SUBJECT:\s*(.+)', combined_text)
         email_match = re.search(r'EMAIL:\s*(.*?)(?:CALL_SCRIPT:|$)', combined_text, re.S)
         script_match = re.search(r'CALL_SCRIPT:\s*(.*)$', combined_text, re.S)
@@ -764,8 +786,13 @@ def ai_email_and_script(raw_text, parts, stage_info, methodology, next_step):
         if script_match:
             for line in script_match.group(1).splitlines():
                 cleaned = re.sub(r'^\s*[-•]\s*', '', line).strip()
-                if cleaned:
-                    call_script.append(cleaned)
+                if not cleaned:
+                    continue
+                if cleaned.upper().startswith('SUBJECT:'):
+                    continue
+                if cleaned.upper().startswith('EMAIL:'):
+                    continue
+                call_script.append(cleaned)
 
         if not call_script:
             call_script = fallback_script
